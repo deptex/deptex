@@ -104,7 +104,7 @@ function seed(
   usageStrings: string[] = ['someApp.handler'],
 ) {
   fsk.set(
-    'project_dependency_vulnerabilities',
+    'project_dependency_findings',
     deps.filter((d) => d.pdvId).map((d) => ({
       id: d.pdvId,
       project_dependency_id: d.pdId,
@@ -150,7 +150,7 @@ function seed(
 
 function verdictOf(fsk: FakeStorage, pdvId: string): { level?: string; details?: any } {
   const u = fsk.updates.find(
-    (x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === pdvId,
+    (x) => x.table === 'project_dependency_findings' && x.filter.id === pdvId,
   );
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }

@@ -137,7 +137,7 @@ async function checkProjectVulnerabilities(
         if (!dep) continue;
 
         const { data: existingVulns } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('id, dependency_vulnerabilities!inner(osv_id)')
           .eq('project_id', projectId)
           .eq('project_dependency_id', dep.id)
@@ -152,7 +152,7 @@ async function checkProjectVulnerabilities(
             newVulns++;
 
             // Log detected event (idempotent via dedup)
-            await supabase.from('project_vulnerability_events').upsert({
+            await supabase.from('project_dependency_finding_events').upsert({
               project_id: projectId,
               osv_id: osv.id,
               event_type: 'detected',
@@ -167,7 +167,7 @@ async function checkProjectVulnerabilities(
           if (osvId && !currentOsvIds.has(osvId)) {
             resolvedVulns++;
 
-            await supabase.from('project_vulnerability_events').upsert({
+            await supabase.from('project_dependency_finding_events').upsert({
               project_id: projectId,
               osv_id: osvId,
               event_type: 'resolved',

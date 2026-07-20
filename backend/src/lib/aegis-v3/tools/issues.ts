@@ -85,7 +85,7 @@ const listProjectIssues: AegisToolEntry<{
 
     if (wanted.has('vulnerability')) {
       const { data: vulns, error } = await ctx.supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(
           'osv_id, severity, summary, depscore, status, project_dependency_id, reachability_level, is_reachable, runtime_confirmed_at',
         )

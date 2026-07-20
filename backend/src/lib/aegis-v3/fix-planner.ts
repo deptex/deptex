@@ -101,7 +101,7 @@ async function gatherFindingContext(
     const activeRunId =
       (await getActiveExtractionId(supabase, input.projectId)) ?? NO_ACTIVE_RUN;
     const { data: pdvLinks, error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('project_dependency_id, project_dependencies!inner(id, dependency_id, is_direct)')
       .eq('project_id', input.projectId)
       .eq('osv_id', input.findingId)

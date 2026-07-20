@@ -94,7 +94,7 @@ describe('applyEpdScoringFallback budget cap resolution', () => {
     return {
       projects: { data: { organization_id: 'org-1' }, error: null },
       organizations: { data: orgRow, error: null },
-      project_dependency_vulnerabilities: {
+      project_dependency_findings: {
         data: [
           {
             id: 'pdv-1',

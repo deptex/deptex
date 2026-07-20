@@ -222,7 +222,7 @@ export async function doReachabilityAndEpd(
   // --- Sub-step: Recalculate depscores with updated reachability ---
   try {
     const { data: pdvsForRescore } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id, project_dependency_id, osv_id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
       .eq('project_id', projectId)
       .eq('extraction_run_id', runId);
@@ -267,7 +267,7 @@ export async function doReachabilityAndEpd(
       for (let i = 0; i < rescoreRows.length; i += 100) {
         const chunk = rescoreRows.slice(i, i + 100);
         const { error: rescoreErr } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .upsert(chunk, { onConflict: 'id' });
         if (rescoreErr) {
           await log.warn('reachability', `depscore rescore upsert failed (${chunk.length} rows, chunk ${i}): ${rescoreErr.message}`);

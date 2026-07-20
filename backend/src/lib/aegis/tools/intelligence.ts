@@ -92,7 +92,7 @@ registerAegisTool(
     }),
     execute: async ({ osvId }) => {
       const { data: pdvs } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('epss_score, cvss_score, project_id')
         .eq('osv_id', osvId);
       const scores = (pdvs ?? []).map((p: any) => ({ epss: p.epss_score, cvss: p.cvss_score, projectId: p.project_id })).filter((s: any) => s.epss != null || s.cvss != null);
@@ -112,7 +112,7 @@ registerAegisTool(
     }),
     execute: async ({ osvId }) => {
       const { data: pdvs } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('cisa_kev, severity')
         .eq('osv_id', osvId)
         .limit(1);

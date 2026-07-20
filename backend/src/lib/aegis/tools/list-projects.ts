@@ -30,7 +30,7 @@ export function listProjectsTool(ctx: { organizationId: string }) {
           .select('project_id', { count: 'exact' })
           .in('project_id', projectIds),
         supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('project_id, severity')
           .in('project_id', projectIds),
         supabase

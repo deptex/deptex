@@ -73,8 +73,8 @@ function loadedDastTarget(id: string) {
 /** Wire every slice's table so all 12 builders succeed with one row each. */
 function stubAllSlicesPopulated() {
   // 1. vulnerabilities — PDV branch (probe returns ≥1 row → PDV RPC).
-  setTableResponse('project_dependency_vulnerabilities', 'then', { data: [{ id: 'pdv-x' }], error: null });
-  setRpcResponse('get_project_vulnerabilities_from_pdv', {
+  setTableResponse('project_dependency_findings', 'then', { data: [{ id: 'pdv-x' }], error: null });
+  setRpcResponse('get_project_dependency_findings_from_pdv', {
     data: [
       {
         id: 'v1',
@@ -230,7 +230,7 @@ describe('GET /findings — project findings bundle', () => {
     // The run-scoped finding tables are never touched, and the vuln branch RPC
     // is never run — that's the no-active-run fast path.
     for (const table of [
-      'project_dependency_vulnerabilities',
+      'project_dependency_findings',
       'project_secret_findings',
       'project_semgrep_findings',
       'project_iac_findings',
@@ -246,8 +246,8 @@ describe('GET /findings — project findings bundle', () => {
 
   it('failure isolation: one slice rejecting degrades only that slice (200 + degradedSlices)', async () => {
     // Populate vulns so it still succeeds; make the iac data query reject.
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [{ id: 'pdv-x' }], error: null });
-    setRpcResponse('get_project_vulnerabilities_from_pdv', {
+    setTableResponse('project_dependency_findings', 'then', { data: [{ id: 'pdv-x' }], error: null });
+    setRpcResponse('get_project_dependency_findings_from_pdv', {
       data: [{ id: 'v1', osv_id: 'CVE-2024-0001', severity: 'high', dependency_id: 'dep-1', dependency_name: 'lodash' }],
       error: null,
     });

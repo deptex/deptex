@@ -99,7 +99,7 @@ async function getOrgProjectIds(organizationId: string): Promise<string[]> {
 async function getVulnDebtPoints(projectIds: string[], activeRunIds: string[]): Promise<number> {
   if (activeRunIds.length === 0) return 0;
   const { data } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('severity')
     .in('project_id', projectIds)
     .in('extraction_run_id', activeRunIds)

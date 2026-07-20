@@ -4146,7 +4146,7 @@ export interface DependencyVersionsResponse {
 
 /**
  * A supply-chain vulnerability row. When the project has been scanned these carry the real
- * reachability-assessed fields from project_dependency_vulnerabilities (depscore, reachability_level);
+ * reachability-assessed fields from project_dependency_findings (depscore, reachability_level);
  * for unscanned versions only the advisory fields (osv_id/severity/summary/aliases) are present.
  */
 export interface SupplyChainVuln {

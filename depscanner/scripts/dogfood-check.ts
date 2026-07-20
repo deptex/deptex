@@ -472,7 +472,7 @@ async function loadActual(
   };
 
   const vulnsRes = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('osv_id, aliases, reachability_level')
     .eq('project_id', projectId)
     .eq('status', 'open');

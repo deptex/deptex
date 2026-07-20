@@ -80,7 +80,7 @@ async function seed(db: PGlite): Promise<void> {
       VALUES ('${DEP}', '${PROJ}', 'lodash', '4.17.20', true, 'dependencies', '${RUN}', NOW());
   `);
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable, runtime_confirmed_at, suppressed, depscore)
+    INSERT INTO project_dependency_findings (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable, runtime_confirmed_at, suppressed, depscore)
     VALUES
       ('${PROJ}','${DEP}','CVE-UNREACH','high','${RUN}','open','unreachable',true,NULL,false,90),
       ('${PROJ}','${DEP}','CVE-CONFIRMED','high','${RUN}','open','confirmed',true,NULL,false,90),
@@ -173,7 +173,7 @@ async function main(): Promise<void> {
 
   console.log('negative / unhooked contract (acknowledge + tracker link do NOT change counts):');
   const findingKeyRow = await db.query<{ finding_key: string }>(
-    `SELECT finding_key FROM project_dependency_vulnerabilities WHERE osv_id='CVE-UNREACH' AND project_id='${PROJ}'`);
+    `SELECT finding_key FROM project_dependency_findings WHERE osv_id='CVE-UNREACH' AND project_id='${PROJ}'`);
   const fk = findingKeyRow.rows[0]?.finding_key ?? 'deadbeef';
   await db.exec(`
     INSERT INTO project_finding_acknowledgements (organization_id, project_id, finding_type, finding_key)

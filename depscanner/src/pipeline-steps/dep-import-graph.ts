@@ -344,7 +344,7 @@ async function buildPypiIndex(ctx: PipelineContext): Promise<TransitiveImportInd
   // Trigger guard: a PDV must exist on an OWNER dep (a row the oracle can
   // actually veto). No open question → zero fetches, zero wall-time.
   const { data: pdvRows } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('project_dependency_id')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);

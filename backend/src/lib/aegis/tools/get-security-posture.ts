@@ -16,7 +16,7 @@ export function getSecurityPostureTool(ctx: { organizationId: string }) {
 
       const projectIds = projects.map((p: any) => p.id);
       const { data: vulns } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('severity, is_reachable, cisa_kev, depscore')
         .in('project_id', projectIds);
 

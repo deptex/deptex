@@ -43,7 +43,7 @@ export function getProjectSummaryTool(ctx: { organizationId: string }) {
           .select('id', { count: 'exact', head: true })
           .eq('project_id', projectId),
         supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('severity, is_reachable, cisa_kev')
           .eq('project_id', projectId),
         supabase

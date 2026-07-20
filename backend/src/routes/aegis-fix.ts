@@ -144,7 +144,7 @@ async function loadFindingDetail(row: FixRow): Promise<FixFindingDetail | null> 
       const activeRunId =
         (await getActiveExtractionId(supabase, row.project_id)) ?? NO_ACTIVE_RUN;
       const { data } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(
           'osv_id, severity, depscore, reachability_level, project_dependencies!inner(name, version)',
         )

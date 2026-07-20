@@ -189,7 +189,7 @@ async function seedProject(storage: any): Promise<SeedPlan> {
   // Both start at 80 (above HIGH threshold of 70) so we can prove the drop.
   const insertPdv = async (osvId: string, reach: string, ctx: number) => {
     const id = randomUUID();
-    await storage.from('project_dependency_vulnerabilities').insert({
+    await storage.from('project_dependency_findings').insert({
       id, project_id: projId, project_dependency_id: pdId, extraction_run_id: runId,
       osv_id: osvId, aliases: [], severity: 'HIGH',
       is_reachable: reach !== 'unreachable',
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
     .eq('project_id', seed.projId)
     .eq('extraction_run_id', seed.runId);
   const { data: pdvs } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('osv_id')
     .eq('project_id', seed.projId)
     .eq('extraction_run_id', seed.runId);
@@ -303,7 +303,7 @@ async function main(): Promise<void> {
   const finals: Record<string, number> = {};
   for (const [label, id] of Object.entries(seed.pdvIds)) {
     const { data } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('contextual_depscore')
       .eq('id', id)
       .single();

@@ -1228,7 +1228,7 @@ async function populateSingleDependency(
       const pdIds = ((pdRows ?? []) as Array<{ id: string }>).map((r) => r.id);
       if (pdIds.length > 0) {
         const { data: findingRows } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('osv_id')
           .in('project_dependency_id', pdIds);
         const findingOsvIds = [...new Set(
@@ -1566,7 +1566,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
     if (projectId && successful > 0) {
       try {
         const { data: currentVulns } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('osv_id')
           .eq('project_id', projectId)
           .eq('extraction_run_id', runIdFilter);
@@ -1574,7 +1574,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         const currentOsvIds = new Set((currentVulns ?? []).map((v: any) => v.osv_id));
 
         const { data: prevDetected } = await supabase
-          .from('project_vulnerability_events')
+          .from('project_dependency_finding_events')
           .select('osv_id')
           .eq('project_id', projectId)
           .eq('event_type', 'detected');
@@ -1585,7 +1585,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         for (const osvId of currentOsvIds) {
           if (!prevDetectedIds.has(osvId)) {
             const { data: recent } = await supabase
-              .from('project_vulnerability_events')
+              .from('project_dependency_finding_events')
               .select('id')
               .eq('project_id', projectId)
               .eq('osv_id', osvId)
@@ -1594,7 +1594,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               .limit(1);
 
             if (!recent?.length) {
-              await supabase.from('project_vulnerability_events').insert({
+              await supabase.from('project_dependency_finding_events').insert({
                 project_id: projectId,
                 osv_id: osvId,
                 event_type: 'detected',
@@ -1607,7 +1607,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         for (const prev of prevDetected ?? []) {
           if (!currentOsvIds.has(prev.osv_id)) {
             const { data: recent } = await supabase
-              .from('project_vulnerability_events')
+              .from('project_dependency_finding_events')
               .select('id')
               .eq('project_id', projectId)
               .eq('osv_id', prev.osv_id)
@@ -1616,7 +1616,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               .limit(1);
 
             if (!recent?.length) {
-              await supabase.from('project_vulnerability_events').insert({
+              await supabase.from('project_dependency_finding_events').insert({
                 project_id: projectId,
                 osv_id: prev.osv_id,
                 event_type: 'resolved',
@@ -1626,7 +1626,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               // If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
               const now = new Date().toISOString();
               const { data: stillOpen } = await supabase
-                .from('project_dependency_vulnerabilities')
+                .from('project_dependency_findings')
                 .select('id, sla_deadline_at')
                 .eq('project_id', projectId)
                 .eq('extraction_run_id', runIdFilter)
@@ -1635,7 +1635,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               for (const row of stillOpen ?? []) {
                 const metInTime = !row.sla_deadline_at || new Date(row.sla_deadline_at) >= new Date();
                 await supabase
-                  .from('project_dependency_vulnerabilities')
+                  .from('project_dependency_findings')
                   .update({
                     sla_status: metInTime ? 'met' : 'resolved_late',
                     sla_met_at: now,
@@ -1663,7 +1663,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
           if (!project) throw new Error('Project not found');
 
           const { data: detectedEvents } = await supabase
-            .from('project_vulnerability_events')
+            .from('project_dependency_finding_events')
             .select('osv_id, created_at')
             .eq('project_id', projectId)
             .eq('event_type', 'detected')
@@ -1675,7 +1675,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
           }
 
           const { data: pdvRows } = await supabase
-            .from('project_dependency_vulnerabilities')
+            .from('project_dependency_findings')
             .select('id, osv_id, severity, created_at')
             .eq('project_id', projectId)
             .eq('extraction_run_id', runIdFilter)
@@ -1700,7 +1700,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               const warningAt = new Date(detected.getTime() + (maxHours * warningPct / 100) * 3600 * 1000);
 
               await supabase
-                .from('project_dependency_vulnerabilities')
+                .from('project_dependency_findings')
                 .update({
                   detected_at: detectedAt,
                   sla_deadline_at: deadline.toISOString(),
@@ -1722,7 +1722,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
     if (projectId && organizationId && successful > 0) {
       try {
         const { data: projVulns } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('osv_id, project_dependency_id, severity, fixed_versions')
           .eq('project_id', projectId)
           .eq('extraction_run_id', runIdFilter);

@@ -944,7 +944,7 @@ non-production project.
 ## 11. Reachability classifier
 
 After the taint engine, the classifier `updateReachabilityLevels`
-(`depscanner/src/reachability.ts`) sets `project_dependency_vulnerabilities.
+(`depscanner/src/reachability.ts`) sets `project_dependency_findings.
 reachability_level` on every PDV based on the available evidence. Levels +
 weights are defined in `depscore.ts:35-40`:
 

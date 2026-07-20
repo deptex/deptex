@@ -178,7 +178,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   const depsByOsvId = new Map<string, ResolvedDep>();
   {
     const { data: pdvRows, error: pdvErr } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, project_dependency_id, aliases')
       .eq('project_id', projectId)
       .eq('extraction_run_id', runId);

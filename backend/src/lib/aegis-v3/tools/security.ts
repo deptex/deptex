@@ -41,7 +41,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
       (await getActiveExtractionId(ctx.supabase as SupabaseClient, resolved.id)) ?? NO_ACTIVE_RUN;
 
     let query = ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select(
         'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, runtime_confirmed_at, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
       )
@@ -114,7 +114,7 @@ const getSecurityPosture: AegisToolEntry<Record<string, never>> = {
     const projectIds = projects.map((p: any) => p.id);
     const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     const { data: vulns } = await ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('severity, is_reachable, cisa_kev, depscore')
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds)
@@ -193,7 +193,7 @@ const getVulnerabilityDetail: AegisToolEntry<{
 
     const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, orgProjectIds);
     let query = ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select(
         'project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at',
       )
@@ -273,7 +273,7 @@ const getReachabilityFlows: AegisToolEntry<{
     if ('error' in ref) return ref;
 
     const { data: vuln } = await ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id, project_id, osv_id, reachability_level, reachability_details, project_dependency_id')
       .eq('id', ref.vulnerabilityId)
       .single();
