@@ -128,7 +128,7 @@ export const aegisApi = {
   },
 
   async regenerate(threadId: string): Promise<{ threadId: string }> {
-    return fetchWithAuth('/api/aegis/v3/regenerate', {
+    return fetchWithAuth('/api/aegis/regenerate', {
       method: 'POST',
       body: JSON.stringify({ threadId }),
     });

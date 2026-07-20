@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { supabase } from '../supabase';
-import { getAegisModel } from '../aegis/provider';
+import { getAegisModel } from './provider';
 
 // Strip leading "Title:" / "Chat title:" labels the model often parrots from
 // the prompt, plus surrounding quotes and trailing punctuation. Returns

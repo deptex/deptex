@@ -11,11 +11,11 @@ import {
   newTurnState,
   type AegisToolEntry,
   type AegisToolContext,
-} from '../lib/aegis-v3/tool-types';
-import { ALL_AEGIS_TOOLS, buildToolSet } from '../lib/aegis-v3/tools';
-import { buildAegisSystemPrompt } from '../lib/aegis-v3/system-prompt';
-import { getOrCreateThread, loadThreadHistory } from '../lib/aegis-v3/thread';
-import { queryRelevantMemories } from '../lib/aegis-v3/memory';
+} from '../lib/aegis/tool-types';
+import { ALL_AEGIS_TOOLS, buildToolSet } from '../lib/aegis/chat-tools';
+import { buildAegisSystemPrompt } from '../lib/aegis/system-prompt';
+import { getOrCreateThread, loadThreadHistory } from '../lib/aegis/thread';
+import { queryRelevantMemories } from '../lib/aegis/memory';
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
@@ -32,7 +32,7 @@ function makeCtx(): AegisToolContext {
   };
 }
 
-describe('aegis-v3 helpers', () => {
+describe('aegis chat helpers', () => {
   beforeEach(() => {
     clearTableRegistry();
     clearRpcRegistry();
@@ -40,7 +40,7 @@ describe('aegis-v3 helpers', () => {
 
   describe('provider re-exports', () => {
     it('exposes the v1 platform-key loaders unchanged', async () => {
-      const provider = await import('../lib/aegis-v3/provider');
+      const provider = await import('../lib/aegis/provider');
       expect(typeof provider.getLanguageModelForOrg).toBe('function');
       expect(typeof provider.getProviderInfoForOrg).toBe('function');
       expect(typeof provider.getEmbeddingModel).toBe('function');

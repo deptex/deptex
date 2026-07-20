@@ -5596,7 +5596,7 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
     }
 
     // 9. Meter the LLM call against the org's prepaid balance (same pattern as
-    // aegis-v3 agent.ts onFinish). recordMeterEvent handles the enforcement
+    // aegis agent.ts onFinish). recordMeterEvent handles the enforcement
     // kill switch and idempotency internally. Errors are swallowed so a
     // billing-DB blip can't fail an analysis that already completed — the
     // daily drift cron reconciles.

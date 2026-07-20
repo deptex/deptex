@@ -1,7 +1,7 @@
 import { generateObject, NoObjectGeneratedError } from 'ai';
 import { supabase } from '../../lib/supabase';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from '../active-extraction';
-import { getLanguageModelForOrg } from '../aegis/llm-provider';
+import { getLanguageModelForOrg } from './llm-provider';
 import { createInstallationToken, getBranchSha } from '../github';
 import {
   gatherSecretContext,

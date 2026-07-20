@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { getLanguageModelForOrg, getProviderInfoForOrg } from './provider';
 import { buildAegisSystemPrompt, type SystemPromptContext } from './system-prompt';
-import { ALL_AEGIS_TOOLS, buildToolSet } from './tools';
+import { ALL_AEGIS_TOOLS, buildToolSet } from './chat-tools';
 import { saveAssistantMessage, saveToolExecution, logChatUsage } from './persistence';
 import { stepsToMessageParts } from './parts';
 import { recordMeterEvent } from '../billing/ledger';
@@ -116,7 +116,7 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
     },
     onFinish: async ({ text, totalUsage, steps }) => {
       console.log(
-        `[aegis-v3] onFinish fired thread=${opts.threadId} textLen=${text?.length ?? 0} steps=${steps?.length ?? 0}`,
+        `[aegis] onFinish fired thread=${opts.threadId} textLen=${text?.length ?? 0} steps=${steps?.length ?? 0}`,
       );
       const inputTokens = totalUsage?.inputTokens ?? 0;
       const outputTokens = totalUsage?.outputTokens ?? 0;
@@ -142,7 +142,7 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
           .not('metadata->error', 'is', null)
           .gte('created_at', new Date(startedAt).toISOString());
       } catch (cleanupErr) {
-        console.warn('[aegis-v3] error-row cleanup failed', cleanupErr);
+        console.warn('[aegis] error-row cleanup failed', cleanupErr);
       }
 
       try {
@@ -152,10 +152,10 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
           parts,
           totalTokens,
         });
-        console.log(`[aegis-v3] saveAssistantMessage OK thread=${opts.threadId}`);
+        console.log(`[aegis] saveAssistantMessage OK thread=${opts.threadId}`);
       } catch (saveErr) {
         console.error(
-          `[aegis-v3] saveAssistantMessage FAILED thread=${opts.threadId}`,
+          `[aegis] saveAssistantMessage FAILED thread=${opts.threadId}`,
           saveErr,
         );
         throw saveErr;
@@ -198,7 +198,7 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
           });
         }
       } catch (err) {
-        console.warn('[aegis-v3] recordMeterEvent failed', err);
+        console.warn('[aegis] recordMeterEvent failed', err);
       }
 
       // Title generation lives in the route (kicked off in parallel with the

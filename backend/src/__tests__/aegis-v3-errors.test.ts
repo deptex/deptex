@@ -1,6 +1,6 @@
-import { classifyChatError, chatErrorUserText } from '../lib/aegis-v3/errors';
-import { cleanGeneratedTitle } from '../lib/aegis-v3/title';
-import { stepsToMessageParts } from '../lib/aegis-v3/parts';
+import { classifyChatError, chatErrorUserText } from '../lib/aegis/errors';
+import { cleanGeneratedTitle } from '../lib/aegis/title';
+import { stepsToMessageParts } from '../lib/aegis/parts';
 
 describe('classifyChatError', () => {
   it('maps statusCode 429 to rate_limit', () => {

@@ -23,13 +23,13 @@ jest.mock('../middleware/auth', () => ({
 }));
 
 const mockGenerateFixPlan = jest.fn();
-jest.mock('../lib/aegis-v3/fix-planner', () => ({
+jest.mock('../lib/aegis/fix-planner', () => ({
   __esModule: true,
   generateFixPlan: (input: any) => mockGenerateFixPlan(input),
 }));
 
 import aegisFixRouter from '../routes/aegis-fix';
-import { signApprovalToken } from '../lib/aegis-v3/approval-token';
+import { signApprovalToken } from '../lib/aegis/approval-token';
 
 function makeApp() {
   const app = express();

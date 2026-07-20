@@ -204,7 +204,78 @@ means "no drop statement"; their code paths are untouched.)
 
 ---
 
-## 6. Verification — Stage 1 (all from inside the worktree)
+## 6. Stage 2 — `lib/aegis-v3` unified into `lib/aegis`
+
+### File moves
+
+Moved 1:1 into `lib/aegis/` (no name collision after Stage 1):
+`agent.ts`, `approval-token.ts`, `errors.ts`, `finding-triage.ts`,
+`fix-planner.ts`, `memory.ts`, `parts.ts`, `persistence.ts`,
+`plan-types.ts`, `resumable-stream.ts`, `system-prompt.ts`, `thread.ts`,
+`title.ts`, `tool-types.ts`.
+
+### Collision resolutions (deliberate)
+
+| Collision | Resolution |
+|---|---|
+| `tools/` (v2 Task-agent registry) vs v3 `tools/` (chat toolset) | v3 tools moved to **`lib/aegis/chat-tools/`**; the Task-agent registry keeps `lib/aegis/tools/` untouched. Two genuinely different toolsets — chat (`ALL_AEGIS_TOOLS`/`buildToolSet` over `tool-types.ts`) vs Task-agent (`registerAegisTool` registry) — kept side by side under self-describing names. |
+| `provider.ts` (v2: `getAegisModel` Gemini loader) vs v3 `provider.ts` (re-export shim + `getEmbeddingModel`) | **Merged into one `lib/aegis/provider.ts`**: keeps `getAegisModel` (only importer was v3 `title.ts`), absorbs v3's `getEmbeddingModel`, re-exports `getLanguageModelForOrg`/`getProviderInfoForOrg` from `./llm-provider`. All former `./provider` imports in moved v3 files work unchanged. |
+| `types.ts` / `memory.ts` | Not actual collisions: v3 had `tool-types.ts` (moved as-is; v2 `types.ts` untouched), and v3 `memory.ts` landed at `lib/aegis/memory.ts` (the v2 memory *tools* live at `tools/memory.ts`). |
+| `system-prompt.ts` | Not a collision post-Stage-1: the dead v2 hyphenated file was deleted in Stage 1, so the live v3 chat system prompt now owns `lib/aegis/system-prompt.ts`. |
+| `hasAegisPermission()` (found during merge, previously masked by `@ts-nocheck`) | `routes/aegis.ts` already had a `hasAegisPermission` with a legacy `interact_with_security_agent` fallback; the v3 router carried its own stricter copy. The merged stream/regenerate handlers now use the **shared v2 helper** (a strict superset — also honors the legacy permission name). |
+
+### Route merge + alias
+
+- The three v3 handlers (`POST /stream`, `GET /stream/:threadId/stream`,
+  `POST /regenerate`) moved verbatim into `routes/aegis.ts` under a
+  "Chat streaming" section; `routes/aegis-v3.ts` deleted.
+- `index.ts`: the `/api/aegis/v3` mount now points at the same `aegisRouter`
+  as `/api/aegis` — a **temporary alias** so clients built against the v3
+  paths keep working mid-deploy (requests to `/api/aegis/v3/stream` fall
+  through the `/api/aegis` mount — no `v3/*` route matches — into the alias
+  mount, which strips the prefix and hits `/stream`). Remove the alias once
+  deployed clients are on the new paths.
+- **Bonus from the merge:** `routes/aegis.ts` no longer needs `// @ts-nocheck`
+  — the whole merged router (v2 + chat handlers) now typechecks (removing it
+  is what exposed the duplicate-helper collision above).
+- `[aegis-v3]` log prefixes normalized to `[aegis]`; stale path comments
+  updated (`security-ops.ts`, `internal-billing.ts`, `projects.ts`,
+  `ai-fix-engine.ts`, `ChatPane.tsx`).
+
+### Import-site updates
+
+- `routes/aegis-fix.ts` (fix-planner / approval-token / plan-types),
+  `routes/aegis.ts` (title), `lib/findings/triage-golden-master.ts` comment.
+- Tests updated in place (filenames deliberately kept — content-only diff):
+  `aegis-v3-errors.test.ts`, `aegis-v3-helpers.test.ts`,
+  `aegis-v3-resolvers.test.ts`, `aegis-v3-tools.test.ts`,
+  `aegis-fix-routes.test.ts`, `fix-planner.test.ts`,
+  `triage-golden-master.test.ts`; `aegis-v3-stream.test.ts` now mounts the
+  merged router at `/api/aegis` (canonical paths), and
+  `aegis-platform.test.ts` mounts it at both prefixes, exercising the alias.
+
+### Frontend
+
+- `ChatPane.tsx`: `POST ${API_BASE_URL}/api/aegis/stream` (the SDK's
+  reconnect URL derives from it: `/api/aegis/stream/:threadId/stream`).
+- `aegis-api.ts`: `POST /api/aegis/regenerate`.
+- CLAUDE.md Aegis flow updated to the final path (+ alias note).
+
+### Left as-is (deliberate)
+
+- Dated/historical docs mentioning old paths
+  (`docs/ai-provider-audit-2026-05-10.md`,
+  `docs/malicious-packages-future-plan.md`) — records of their time, per the
+  repo's established convention for dated docs.
+- The `aegis_chat_v3` **feature string** in `persistence.ts` `logChatUsage`
+  (written into `ai_usage_logs.feature`) — a data value, not a path; renaming
+  it would fork usage-analytics history.
+
+---
+
+## 7. Verification (all from inside the worktree, re-run in full after each stage)
+
+Identical results after Stage 1 and after Stage 2:
 
 - `backend`: `npx tsc --noEmit` — 0 errors other than 2 pre-existing TS2742
   junction-environment artifacts (`llm-provider.ts`, `provider.ts`; the

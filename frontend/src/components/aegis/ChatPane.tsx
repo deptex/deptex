@@ -304,7 +304,7 @@ export function ChatPane({
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
-        api: `${API_BASE_URL}/api/aegis/v3/stream`,
+        api: `${API_BASE_URL}/api/aegis/stream`,
         prepareSendMessagesRequest: ({ messages, body }) => {
           const lastUser = [...messages].reverse().find((m) => m.role === 'user');
           const text = (lastUser?.parts ?? [])
@@ -340,7 +340,7 @@ export function ChatPane({
     useChat({
       // Pin the chat id to the threadId so the SDK's reconnectToStream calls
       // GET `${api}/${threadId}/stream` — that's the resume endpoint we added
-      // to `backend/src/routes/aegis-v3.ts`. For brand-new chats this is the
+      // to `backend/src/routes/aegis.ts`. For brand-new chats this is the
       // client-generated UUID created at mount; the server uses the same id
       // in `getOrCreateThread`, so the reconnect URL always lands on the
       // right thread even before the first response.

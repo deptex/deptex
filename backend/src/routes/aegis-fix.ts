@@ -3,8 +3,8 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from '../lib/active-extraction';
 import { supabase } from '../lib/supabase';
-import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
-import { signApprovalToken } from '../lib/aegis-v3/approval-token';
+import { generateFixPlan } from '../lib/aegis/fix-planner';
+import { signApprovalToken } from '../lib/aegis/approval-token';
 import {
   createInstallationToken,
   getBranchSha,
@@ -14,7 +14,7 @@ import type {
   FindingType,
   FixPlan,
   FixStatus,
-} from '../lib/aegis-v3/plan-types';
+} from '../lib/aegis/plan-types';
 
 const router = express.Router();
 router.use(authenticateUser);

@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { supabase } from '../../lib/supabase';
-import { addParticipant } from '../aegis/participants';
+import { addParticipant } from './participants';
 
 export interface ThreadContext {
   type?: string;
@@ -58,7 +58,7 @@ export async function getOrCreateThread(
         context_id: context?.id || null,
       });
     if (insertErr) {
-      console.error('[aegis-v3] thread insert with client id failed', insertErr);
+      console.error('[aegis] thread insert with client id failed', insertErr);
       throw new Error('thread_create_failed');
     }
     await addParticipant(threadId, userId);
@@ -66,7 +66,7 @@ export async function getOrCreateThread(
   }
 
   // Legacy path: no client id provided. Kept for any caller that still relies
-  // on server-generated ids. The aegis-v3 chat route always provides one.
+  // on server-generated ids. The aegis chat route always provides one.
   const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
   const { data, error } = await supabase
     .from('aegis_chat_threads')
@@ -83,7 +83,7 @@ export async function getOrCreateThread(
     .single();
 
   if (error || !data) {
-    console.error('[aegis-v3] thread insert failed', error);
+    console.error('[aegis] thread insert failed', error);
     throw new Error('thread_create_failed');
   }
 
@@ -100,7 +100,7 @@ export async function loadThreadHistory(threadId: string): Promise<ModelMessage[
     .limit(50);
 
   if (error) {
-    console.error('[aegis-v3] Failed to load thread history:', error);
+    console.error('[aegis] Failed to load thread history:', error);
     return [];
   }
   if (!messages?.length) return [];

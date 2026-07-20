@@ -1,5 +1,5 @@
 /**
- * Server-side resumable streams for Aegis v3.
+ * Server-side resumable streams for the Aegis chat.
  *
  * When the model is mid-generation and the user navigates away, the HTTP
  * socket dies but the SDK + agent keep running (route-level consumeStream).
@@ -68,7 +68,7 @@ export async function registerStream(
     await redis.set(threadKey(threadId), streamId, { ex: TTL_SECONDS });
     return true;
   } catch (err) {
-    console.warn('[aegis-v3] resumable-stream registerStream failed', err);
+    console.warn('[aegis] resumable-stream registerStream failed', err);
     return false;
   }
 }
@@ -102,7 +102,7 @@ export function createChunkSink(streamId: string): {
         }
       })
       .catch((err) => {
-        console.warn('[aegis-v3] resumable-stream append failed', err);
+        console.warn('[aegis] resumable-stream append failed', err);
       });
   };
 
@@ -116,7 +116,7 @@ export function createChunkSink(streamId: string): {
       await redis.rpush(key, END_SENTINEL);
       if (!ttlSet) await redis.expire(key, TTL_SECONDS);
     } catch (err) {
-      console.warn('[aegis-v3] resumable-stream end failed', err);
+      console.warn('[aegis] resumable-stream end failed', err);
     }
   };
 
@@ -135,7 +135,7 @@ export async function clearActiveStream(threadId: string): Promise<void> {
   try {
     await redis.del(threadKey(threadId));
   } catch (err) {
-    console.warn('[aegis-v3] resumable-stream clearActiveStream failed', err);
+    console.warn('[aegis] resumable-stream clearActiveStream failed', err);
   }
 }
 
@@ -146,7 +146,7 @@ export async function getActiveStreamId(threadId: string): Promise<string | null
     const v = await redis.get(threadKey(threadId));
     return typeof v === 'string' && v.length > 0 ? v : null;
   } catch (err) {
-    console.warn('[aegis-v3] resumable-stream getActiveStreamId failed', err);
+    console.warn('[aegis] resumable-stream getActiveStreamId failed', err);
     return null;
   }
 }
@@ -182,7 +182,7 @@ export async function replayStream(
       const raw = await redis.lrange(key, nextIndex, -1);
       entries = (raw as unknown as string[]) ?? [];
     } catch (err) {
-      console.warn('[aegis-v3] resumable-stream lrange failed', err);
+      console.warn('[aegis] resumable-stream lrange failed', err);
       return;
     }
 

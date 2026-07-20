@@ -20,28 +20,28 @@ jest.mock('../middleware/auth', () => ({
   },
 }));
 
-jest.mock('../lib/aegis-v3/thread', () => ({
+jest.mock('../lib/aegis/thread', () => ({
   getOrCreateThread: jest.fn().mockResolvedValue(THREAD_ID),
   loadThreadHistory: jest.fn().mockResolvedValue([]),
 }));
 
-jest.mock('../lib/aegis-v3/memory', () => ({
+jest.mock('../lib/aegis/memory', () => ({
   queryRelevantMemories: jest.fn().mockResolvedValue(''),
 }));
 
-jest.mock('../lib/aegis-v3/persistence', () => ({
+jest.mock('../lib/aegis/persistence', () => ({
   saveUserMessage: jest.fn().mockResolvedValue(undefined),
   saveAssistantMessage: jest.fn().mockResolvedValue(undefined),
   saveToolExecution: jest.fn().mockResolvedValue(undefined),
   logChatUsage: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../lib/aegis-v3/title', () => ({
+jest.mock('../lib/aegis/title', () => ({
   generateThreadTitle: jest.fn().mockResolvedValue(undefined),
   cleanGeneratedTitle: (raw: string) => raw,
 }));
 
-jest.mock('../lib/aegis-v3/errors', () => ({
+jest.mock('../lib/aegis/errors', () => ({
   classifyChatError: (err: any) => ({ type: 'transient', message: err?.message }),
   writeAegisChatError: jest.fn().mockResolvedValue(undefined),
 }));
@@ -53,7 +53,7 @@ jest.mock('../lib/aegis/participants', () => ({
 }));
 
 const mockGetLanguageModelForOrg = jest.fn();
-jest.mock('../lib/aegis-v3/provider', () => ({
+jest.mock('../lib/aegis/provider', () => ({
   __esModule: true,
   getLanguageModelForOrg: (orgId: string) => mockGetLanguageModelForOrg(orgId),
   getProviderInfoForOrg: jest.fn().mockResolvedValue({
@@ -72,16 +72,16 @@ jest.mock('../lib/billing/ledger', () => ({
   recordMeterEvent: jest.fn().mockResolvedValue({ deducted: false, newBalanceCents: null }),
 }));
 
-import aegisV3Router from '../routes/aegis-v3';
-import { saveUserMessage, saveAssistantMessage } from '../lib/aegis-v3/persistence';
-import { getOrCreateThread } from '../lib/aegis-v3/thread';
-import { writeAegisChatError } from '../lib/aegis-v3/errors';
+import aegisRouter from '../routes/aegis';
+import { saveUserMessage, saveAssistantMessage } from '../lib/aegis/persistence';
+import { getOrCreateThread } from '../lib/aegis/thread';
+import { writeAegisChatError } from '../lib/aegis/errors';
 import { canCharge } from '../lib/billing/ledger';
 
 function makeApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/aegis/v3', aegisV3Router);
+  app.use('/api/aegis', aegisRouter);
   return app;
 }
 
@@ -141,10 +141,10 @@ beforeEach(() => {
   (canCharge as jest.Mock).mockResolvedValue({ allowed: true, balanceCents: 100_000 });
 });
 
-describe('POST /api/aegis/v3/stream', () => {
+describe('POST /api/aegis/stream', () => {
   it('rejects requests missing organizationId or message', async () => {
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID });
     expect(res.status).toBe(400);
   });
@@ -157,7 +157,7 @@ describe('POST /api/aegis/v3/stream', () => {
     });
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID, message: 'hi' });
     expect(res.status).toBe(403);
   });
@@ -167,7 +167,7 @@ describe('POST /api/aegis/v3/stream', () => {
     mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('Hello from Aegis.'));
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID, message: 'list my projects' });
 
     expect(res.status).toBe(200);
@@ -206,7 +206,7 @@ describe('POST /api/aegis/v3/stream', () => {
     mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('should not stream'));
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID, message: 'expensive query' });
 
     expect(res.status).toBe(200);
@@ -231,7 +231,7 @@ describe('POST /api/aegis/v3/stream', () => {
     mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('streamed anyway'));
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID, message: 'hi' });
 
     expect(res.status).toBe(200);
@@ -248,7 +248,7 @@ describe('POST /api/aegis/v3/stream', () => {
     mockGetLanguageModelForOrg.mockRejectedValueOnce(new Error('Platform API key for anthropic is not configured'));
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/stream')
+      .post('/api/aegis/stream')
       .send({ organizationId: ORG_ID, message: 'hi' });
 
     expect(res.status).toBe(500);
@@ -259,16 +259,16 @@ describe('POST /api/aegis/v3/stream', () => {
   });
 });
 
-describe('POST /api/aegis/v3/regenerate', () => {
+describe('POST /api/aegis/regenerate', () => {
   it('rejects requests without threadId', async () => {
-    const res = await request(makeApp()).post('/api/aegis/v3/regenerate').send({});
+    const res = await request(makeApp()).post('/api/aegis/regenerate').send({});
     expect(res.status).toBe(400);
   });
 
   it('returns 404 when the caller is not a thread participant', async () => {
     mockGetThreadForParticipant.mockResolvedValueOnce(null);
     const res = await request(makeApp())
-      .post('/api/aegis/v3/regenerate')
+      .post('/api/aegis/regenerate')
       .send({ threadId: THREAD_ID });
     expect(res.status).toBe(404);
   });
@@ -284,7 +284,7 @@ describe('POST /api/aegis/v3/regenerate', () => {
       error: null,
     });
     const res = await request(makeApp())
-      .post('/api/aegis/v3/regenerate')
+      .post('/api/aegis/regenerate')
       .send({ threadId: THREAD_ID });
     expect(res.status).toBe(403);
   });
@@ -297,7 +297,7 @@ describe('POST /api/aegis/v3/regenerate', () => {
     setOwnerWithAegisPermission();
     setTableResponse('aegis_chat_messages', 'maybeSingle', { data: null, error: null });
     const res = await request(makeApp())
-      .post('/api/aegis/v3/regenerate')
+      .post('/api/aegis/regenerate')
       .send({ threadId: THREAD_ID });
     expect(res.status).toBe(400);
   });
@@ -315,7 +315,7 @@ describe('POST /api/aegis/v3/regenerate', () => {
     setTableResponse('aegis_chat_messages', 'then', { data: null, error: null });
 
     const res = await request(makeApp())
-      .post('/api/aegis/v3/regenerate')
+      .post('/api/aegis/regenerate')
       .send({ threadId: THREAD_ID });
 
     expect(res.status).toBe(200);

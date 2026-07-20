@@ -17,7 +17,7 @@ router.use(requireInternalKey);
 // a real resource, we REJECT. A leaked INTERNAL_API_KEY therefore can't drain an arbitrary
 // org — it can only charge orgs with legitimate active work it can actually name.
 //
-// In-process callers (aegis-v3, EPD, rule generation) call recordMeterEvent directly with a
+// In-process callers (aegis chat, EPD, rule generation) call recordMeterEvent directly with a
 // trusted org_id and never reach this HTTP route, so they need no mapping here.
 //
 // Returns:

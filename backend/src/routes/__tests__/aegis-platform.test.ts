@@ -79,12 +79,13 @@ function setupSupabaseForOrgMember() {
 import express from 'express';
 import request from 'supertest';
 import aegisRouter from '../aegis';
-import aegisV3Router from '../aegis-v3';
 
 const app = express();
 app.use(express.json());
 app.use('/api/aegis', aegisRouter);
-app.use('/api/aegis/v3', aegisV3Router);
+// Same temporary alias as index.ts — the chat stream routes moved from
+// /api/aegis/v3 to /api/aegis; these tests exercise the alias path.
+app.use('/api/aegis/v3', aegisRouter);
 
 beforeEach(() => {
   jest.clearAllMocks();

@@ -3,7 +3,7 @@ import {
   referenceStoredAutoIgnored,
   referenceEffectiveAutoIgnored,
 } from '../triage-golden-master';
-import { vulnAutoIgnoreReason } from '../../aegis-v3/finding-triage';
+import { vulnAutoIgnoreReason } from '../../aegis/finding-triage';
 
 /**
  * Golden-master freeze. Locks the per-row auto-triage verdict as of the

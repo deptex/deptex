@@ -7,8 +7,8 @@ import {
   queryBuilder,
 } from '../test/mocks/supabaseSingleton';
 
-import { ALL_AEGIS_TOOLS } from '../lib/aegis-v3/tools';
-import { newTurnState, type AegisToolContext, type AegisToolEntry } from '../lib/aegis-v3/tool-types';
+import { ALL_AEGIS_TOOLS } from '../lib/aegis/chat-tools';
+import { newTurnState, type AegisToolContext, type AegisToolEntry } from '../lib/aegis/tool-types';
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
@@ -47,10 +47,10 @@ jest.mock('../lib/latest-safe-version', () => ({
 }));
 import { calculateLatestSafeVersion } from '../lib/latest-safe-version';
 
-jest.mock('../lib/aegis-v3/fix-planner', () => ({
+jest.mock('../lib/aegis/fix-planner', () => ({
   generateFixPlan: jest.fn(),
 }));
-import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
+import { generateFixPlan } from '../lib/aegis/fix-planner';
 
 jest.mock('../lib/active-extraction', () => ({
   NO_ACTIVE_RUN: '__no_active_run__',

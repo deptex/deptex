@@ -1,7 +1,7 @@
 import { supabase } from '../../lib/supabase';
 import { logAIUsage } from '../ai/logging';
 import { getProviderInfoForOrg } from './provider';
-import type { MessagePart } from '../aegis/types';
+import type { MessagePart } from './types';
 
 export interface SaveUserMessageOptions {
   threadId: string;
@@ -43,7 +43,7 @@ export async function saveUserMessage(opts: SaveUserMessageOptions): Promise<voi
     metadata: { parts: [{ type: 'text', text: content }] },
   });
   if (error) {
-    console.error('[aegis-v3] Failed to save user message:', error);
+    console.error('[aegis] Failed to save user message:', error);
     throw new Error(`Failed to save user message: ${error.message}`);
   }
 }
@@ -85,7 +85,7 @@ export async function saveAssistantMessage(opts: SaveAssistantMessageOptions): P
         .eq('id', threadId);
     }
   } catch (err) {
-    console.error('[aegis-v3] Failed to save assistant message:', err);
+    console.error('[aegis] Failed to save assistant message:', err);
   }
 }
 
@@ -135,6 +135,6 @@ export async function saveToolExecution(opts: SaveToolExecutionOptions): Promise
       tokens_used: opts.tokensUsed,
     });
   } catch (err) {
-    console.error('[aegis-v3] Failed to save tool execution:', err);
+    console.error('[aegis] Failed to save tool execution:', err);
   }
 }

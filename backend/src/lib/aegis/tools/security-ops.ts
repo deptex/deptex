@@ -220,8 +220,8 @@ registerAegisTool(
 );
 
 // triggerFix / getFixStatus retired with the aider-worker.
-// Replaced by the aegis-v3 fix tools (request_fix / approve_fix / reject_fix /
-// check_fix_status) in lib/aegis-v3/tools/fix.ts.
+// Replaced by the aegis chat fix tools (request_fix / approve_fix / reject_fix /
+// check_fix_status) in lib/aegis/chat-tools/fix.ts.
 
 // 7. createSecuritySprint
 registerAegisTool(

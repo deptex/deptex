@@ -1,4 +1,4 @@
-import type { MessagePart } from '../aegis/types';
+import type { MessagePart } from './types';
 
 type StepLike = {
   text?: string;

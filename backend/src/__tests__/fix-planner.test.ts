@@ -27,7 +27,7 @@ jest.mock('../lib/github', () => ({
   getBranchSha: jest.fn().mockResolvedValue(HEAD_SHA),
 }));
 
-import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
+import { generateFixPlan } from '../lib/aegis/fix-planner';
 
 function happyPlanText(): string {
   return JSON.stringify({

@@ -4,7 +4,7 @@
  * Today the "is this finding auto-ignored?" verdict is computed in THREE places
  * that have silently drifted apart:
  *   1. frontend  `autoTriageRow()`        (VulnerabilityExpandableTable.tsx) — canonical, what the user sees
- *   2. backend   `vulnAutoIgnoreReason()` (lib/aegis-v3/finding-triage.ts)   — SCA-only mirror for Aegis
+ *   2. backend   `vulnAutoIgnoreReason()` (lib/aegis/finding-triage.ts)   — SCA-only mirror for Aegis
  *   3. SQL       `security_summary_counts` (phase54)                          — a LOSSY re-impl for the count pills
  *
  * The findings-status foundation collapses these into ONE source: a stored
