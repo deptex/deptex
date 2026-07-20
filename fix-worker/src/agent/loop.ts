@@ -25,8 +25,9 @@ import {
  *  Configurable via AEGIS_TASK_WALL_CLOCK_SEC; default 30 min (a slower/cheaper
  *  model needs more room than a frontier one). */
 const WALL_CLOCK_MS = (parseInt(process.env.AEGIS_TASK_WALL_CLOCK_SEC || '1800', 10) || 1800) * 1000;
-/** Hard step cap PER compaction pass (mirrors the plan's ~40). */
-const MAX_STEPS = 40;
+/** Hard step cap PER compaction pass (mirrors the plan's ~40). Env-overridable
+ *  (lower it to exercise the step-cap budget terminal in a test). */
+const MAX_STEPS = parseInt(process.env.AEGIS_TASK_MAX_STEPS || '', 10) || 40;
 /** Max auto-compaction cycles in a single run. A run that fills the window this
  *  many times is pathological (each compaction restarts from a bounded view);
  *  the wall clock is the real cost bound. Env-overridable for testing. */
