@@ -174,11 +174,10 @@ export async function assembleFindingsBundle(
 /**
  * ⚠️ ACCESS-FREE. Caller passes ALREADY-VALIDATED project ids + their active run ids.
  *
- * The org Findings page's SCA slice as ONE bounded cross-project query — the same
- * shape the standalone org `/vulnerabilities` read uses, but `skipCount` + a
- * worst-first LIMIT (no exact count). Includes the disposition columns the row kebab
- * needs (finding_key/status/…), which the standalone read selects but drops. Does NOT
- * stamp project_name/framework — the caller does that from its validated projects.
+ * The org Findings page's SCA slice as ONE bounded cross-project query with
+ * `skipCount` + a worst-first LIMIT (no exact count). Includes the disposition
+ * columns the row kebab needs (finding_key/status/…). Does NOT stamp
+ * project_name/framework — the caller does that from its validated projects.
  */
 export async function buildOrgVulnerabilitiesUnchecked(
   projectIds: string[],

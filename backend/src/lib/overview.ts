@@ -36,7 +36,7 @@ export async function getAccessibleProjectIdsInOrganization(
 
   // Owners always see all projects, so skip the org_roles read for them — one fewer
   // sequential round-trip on the common case (this gate backs the org Findings page,
-  // /vulnerabilities, etc.). Only non-owners need the permission lookup.
+  // the security summary, etc.). Only non-owners need the permission lookup.
   let canViewAllProjects = orgMembership.role === 'owner';
   if (!canViewAllProjects) {
     const { data: orgRole } = await supabase
@@ -98,8 +98,8 @@ export async function buildOrgSecuritySummary(
   id: string
 ): Promise<BuilderResult<{ projects: any[] }>> {
   // Scope to the projects this member can actually see (owner / manage_teams_and_projects ->
-  // all; otherwise their team + directly-assigned projects). Matches the org /vulnerabilities
-  // endpoint instead of leaking every project's posture to any member.
+  // all; otherwise their team + directly-assigned projects). Matches the org /findings
+  // bundle instead of leaking every project's posture to any member.
   const { projectIds: accessibleProjectIds, error: accessError } =
     await getAccessibleProjectIdsInOrganization(userId, id);
   if (accessError) {

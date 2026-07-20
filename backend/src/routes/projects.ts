@@ -26,7 +26,7 @@ import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { createRemovePrForProject } from '../lib/create-remove-pr';
 import { isVersionAffected, isVersionFixed } from '../lib/semver-affected';
 import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityToLevel } from '../lib/ghsa';
-import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
+import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/findings-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { recomputeProjectSummary } from '../lib/security-summary';
@@ -7123,8 +7123,8 @@ router.post('/:id/projects/:projectId/dependencies/:dependencyId/bump-pr', async
 });
 
 
-// GET /api/organizations/:id/projects/:projectId/vulnerabilities - List all vulnerabilities for project dependencies
-router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, res) => {
+// GET /api/organizations/:id/projects/:projectId/dependency-findings - List all dependency (SCA) findings for project dependencies
+router.get('/:id/projects/:projectId/dependency-findings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
@@ -9846,8 +9846,8 @@ router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) =>
   }
 });
 
-// GET /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/detail
-router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req: AuthRequest, res) => {
+// GET /api/organizations/:id/projects/:projectId/dependency-findings/:osvId/detail
+router.get('/:id/projects/:projectId/dependency-findings/:osvId/detail', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
@@ -9903,8 +9903,8 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/suppress
-router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (req: AuthRequest, res) => {
+// PATCH /api/organizations/:id/projects/:projectId/dependency-findings/:osvId/suppress
+router.patch('/:id/projects/:projectId/dependency-findings/:osvId/suppress', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
@@ -9950,8 +9950,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress
-router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async (req: AuthRequest, res) => {
+// PATCH /api/organizations/:id/projects/:projectId/dependency-findings/:osvId/unsuppress
+router.patch('/:id/projects/:projectId/dependency-findings/:osvId/unsuppress', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
@@ -10108,8 +10108,8 @@ router.delete('/:id/projects/:projectId/flow-suppressions/:hash', async (req: Au
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk
-router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', async (req: AuthRequest, res) => {
+// PATCH /api/organizations/:id/projects/:projectId/dependency-findings/:osvId/accept-risk
+router.patch('/:id/projects/:projectId/dependency-findings/:osvId/accept-risk', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
@@ -10158,8 +10158,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk
-router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', async (req: AuthRequest, res) => {
+// PATCH /api/organizations/:id/projects/:projectId/dependency-findings/:osvId/unaccept-risk
+router.patch('/:id/projects/:projectId/dependency-findings/:osvId/unaccept-risk', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
@@ -10367,155 +10367,6 @@ router.get('/:id/overview', async (req: AuthRequest, res) => {
     console.error('Error fetching org overview:', error);
     captureInfraError(error, 'org-overview', { organization_id: req.params.id });
     res.status(500).json({ error: 'Failed to fetch overview' });
-  }
-});
-
-// GET /api/organizations/:id/vulnerabilities — paginated dependency vulns across accessible projects (PDV rows)
-router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id: organizationId } = req.params;
-
-    const { projectIds: accessibleProjectIds, error: accessError } = await getAccessibleProjectIdsInOrganization(
-      userId,
-      organizationId
-    );
-    if (accessError) {
-      return res.status(accessError.status).json({ error: accessError.message });
-    }
-    if (accessibleProjectIds.length === 0) {
-      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
-    }
-
-    // Phase 19: fetch active_extraction_run_id for each accessible project so we only read rows
-    // tagged with the currently-visible run. Projects with no active run contribute no findings.
-    const { data: projectsForActive } = await supabase
-      .from('projects')
-      .select('id, active_extraction_run_id')
-      .in('id', accessibleProjectIds);
-    const activeRunIds = (projectsForActive ?? [])
-      .map((p: any) => p.active_extraction_run_id)
-      .filter(Boolean) as string[];
-    if (activeRunIds.length === 0) {
-      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
-    }
-
-    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
-    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
-    const severityFilter = (req.query.severity as string) || '';
-    const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
-
-    // Return open + ignored rows (the table filters Open/Ignored/All client-side
-    // via the stored status); resolved rows stay hidden.
-    let countQuery = supabase
-      .from('project_dependency_findings')
-      .select('*', { count: 'exact', head: true })
-      .in('project_id', accessibleProjectIds)
-      .in('extraction_run_id', activeRunIds)
-      .neq('status', 'resolved');
-    if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
-
-    const { count: totalCount, error: countError } = await countQuery;
-    if (countError) throw countError;
-
-    const from = (page - 1) * perPage;
-    const to = from + perPage - 1;
-
-    let dataQuery = supabase
-      .from('project_dependency_findings')
-      .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
-      )
-      .in('project_id', accessibleProjectIds)
-      .in('extraction_run_id', activeRunIds)
-      .neq('status', 'resolved');
-    if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
-
-    const { data: rows, error: dataError } = await dataQuery
-      .order('contextual_depscore', { ascending: false, nullsFirst: false })
-      .order('depscore', { ascending: false, nullsFirst: false })
-      .range(from, to);
-
-    if (dataError) throw dataError;
-
-    const list = rows || [];
-    const pdIds = [...new Set(list.map((r: any) => r.project_dependency_id).filter(Boolean))];
-    const projIds = [...new Set(list.map((r: any) => r.project_id).filter(Boolean))];
-
-    const depMap = new Map<string, { name: string; version: string; dependency_id: string }>();
-    const projMap = new Map<string, { name: string }>();
-
-    if (pdIds.length > 0) {
-      const { data: deps, error: depErr } = await supabase
-        .from('project_dependencies')
-        .select('id, name, version, dependency_id')
-        .in('id', pdIds)
-        .is('removed_at', null);
-      if (depErr) throw depErr;
-      for (const d of deps || []) {
-        depMap.set((d as any).id, {
-          name: (d as any).name ?? 'Unknown',
-          version: (d as any).version ?? 'Unknown',
-          dependency_id: (d as any).dependency_id ?? '',
-        });
-      }
-    }
-
-    if (projIds.length > 0) {
-      const { data: projs, error: projErr } = await supabase
-        .from('projects')
-        .select('id, name')
-        .in('id', projIds);
-      if (projErr) throw projErr;
-      for (const p of projs || []) {
-        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown' });
-      }
-    }
-
-    const data = list.map((r: any) => {
-      const dep = r.project_dependency_id ? depMap.get(r.project_dependency_id) : undefined;
-      const proj = r.project_id ? projMap.get(r.project_id) : undefined;
-      return {
-        id: r.id,
-        osv_id: r.osv_id,
-        severity: r.severity,
-        summary: r.summary ?? null,
-        details: null,
-        aliases: r.aliases || [],
-        fixed_versions: r.fixed_versions || [],
-        published_at: r.published_at ?? null,
-        modified_at: null,
-        dependency_id: dep?.dependency_id ?? '',
-        dependency_name: dep?.name ?? 'Unknown',
-        dependency_version: dep?.version ?? 'Unknown',
-        is_reachable: r.is_reachable ?? undefined,
-        epss_score: r.epss_score,
-        cvss_score: r.cvss_score ?? null,
-        cisa_kev: r.cisa_kev ?? false,
-        depscore: r.depscore ?? null,
-        contextual_depscore: r.contextual_depscore ?? null,
-        entry_point_classification: r.entry_point_classification ?? null,
-        epd_status: r.epd_status ?? null,
-        sla_status: r.sla_status ?? null,
-        sla_deadline_at: r.sla_deadline_at ?? null,
-        reachability_level: r.reachability_level ?? null,
-        runtime_confirmed_at: r.runtime_confirmed_at ?? null,
-        runtime_confirmed_dast_finding_id: r.runtime_confirmed_dast_finding_id ?? null,
-        runtime_confirmed_prior_level: r.runtime_confirmed_prior_level ?? null,
-        project_id: r.project_id,
-        project_name: proj?.name ?? 'Unknown',
-      };
-    });
-
-    res.json({
-      data,
-      total: totalCount ?? 0,
-      page,
-      per_page: perPage,
-    });
-  } catch (error: any) {
-    console.error('Error fetching organization vulnerabilities:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch organization vulnerabilities' });
   }
 });
 
@@ -11135,8 +10986,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
   }
 });
 
-// GET /api/organizations/:id/projects/:projectId/vulnerability-timeline?days=30
-router.get('/:id/projects/:projectId/vulnerability-timeline', async (req: AuthRequest, res) => {
+// GET /api/organizations/:id/projects/:projectId/dependency-finding-timeline?days=30
+router.get('/:id/projects/:projectId/dependency-finding-timeline', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id: organizationId, projectId } = req.params;

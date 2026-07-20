@@ -150,7 +150,7 @@ describe('Aegis Autonomous Security Platform', () => {
       expect(typeof registry.buildToolSet).toBe('function');
       const metas = registry.getAllToolMetas();
       expect(Array.isArray(metas)).toBe(true);
-      // Without loading all tool files (redis, vuln-counts, etc.), we only see tools
+      // Without loading all tool files (redis, findings-counts, etc.), we only see tools
       // registered by modules loaded so far (e.g. via aegis router). So we just assert
       // the registry API exists and returns an array.
       if (metas.length > 0) {

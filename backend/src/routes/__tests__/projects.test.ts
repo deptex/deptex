@@ -910,7 +910,7 @@ describe('Project Routes', () => {
       pushTableResponse('projects', { data: { active_extraction_run_id: 'run-1' }, error: null });
 
       const res = await request(app)
-        .patch(`/api/organizations/${orgId}/projects/${projectId}/vulnerabilities/CVE-2024-1/suppress`)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/dependency-findings/CVE-2024-1/suppress`)
         .set('Authorization', `Bearer ${mockToken}`);
 
       expect(res.status).toBe(200);

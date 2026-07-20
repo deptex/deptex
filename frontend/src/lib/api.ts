@@ -2397,11 +2397,11 @@ export const api = {
     return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
-  async getProjectVulnerabilities(
+  async getProjectDependencyFindings(
     organizationId: string,
     projectId: string
   ): Promise<ProjectVulnerability[]> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities`);
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependency-findings`);
   },
 
   // The whole Findings tab in one request — see ProjectFindingsBundle.
@@ -2428,36 +2428,6 @@ export const api = {
     organizationId: string
   ): Promise<TeamFindingsBundle> {
     return fetchWithAuth(`/api/organizations/${organizationId}/findings`);
-  },
-
-  async getOrganizationVulnerabilities(
-    organizationId: string,
-    params?: { page?: number; per_page?: number; severity?: string }
-  ): Promise<{ data: ProjectVulnerability[]; total: number; page: number; per_page: number }> {
-    const p = new URLSearchParams();
-    if (params?.page != null) p.set('page', String(params.page));
-    if (params?.per_page != null) p.set('per_page', String(params.per_page));
-    if (params?.severity) p.set('severity', params.severity);
-    const q = p.toString();
-    return fetchWithAuth(
-      `/api/organizations/${organizationId}/vulnerabilities${q ? `?${q}` : ''}`
-    );
-  },
-
-  async getTeamVulnerabilities(
-    organizationId: string,
-    teamId: string,
-    params?: { page?: number; per_page?: number; severity?: string; show_ignored?: boolean }
-  ): Promise<{ data: ProjectVulnerability[]; total: number; page: number; per_page: number }> {
-    const p = new URLSearchParams();
-    if (params?.page != null) p.set('page', String(params.page));
-    if (params?.per_page != null) p.set('per_page', String(params.per_page));
-    if (params?.show_ignored) p.set('show_ignored', 'true');
-    if (params?.severity) p.set('severity', params.severity);
-    const q = p.toString();
-    return fetchWithAuth(
-      `/api/organizations/${organizationId}/teams/${teamId}/vulnerabilities${q ? `?${q}` : ''}`
-    );
   },
 
   async getTeamSecretFindings(
@@ -2943,7 +2913,7 @@ export const api = {
     },
   },
 
-  async getVulnerabilityDetail(
+  async getDependencyFindingDetail(
     organizationId: string,
     projectId: string,
     osvId: string
@@ -2955,7 +2925,7 @@ export const api = {
     if (inflight) return inflight;
     const promise = (
       fetchWithAuth(
-        `/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/detail`
+        `/api/organizations/${organizationId}/projects/${projectId}/dependency-findings/${encodeURIComponent(osvId)}/detail`
       ) as Promise<VulnerabilityDetail>
     )
       .then((value) => {
@@ -2969,24 +2939,24 @@ export const api = {
     return promise;
   },
 
-  async suppressVulnerability(
+  async suppressDependencyFinding(
     organizationId: string,
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/suppress`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependency-findings/${encodeURIComponent(osvId)}/suppress`, {
       method: 'PATCH',
     });
     vulnDetailCache.clear();
     return res;
   },
 
-  async unsuppressVulnerability(
+  async unsuppressDependencyFinding(
     organizationId: string,
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unsuppress`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependency-findings/${encodeURIComponent(osvId)}/unsuppress`, {
       method: 'PATCH',
     });
     vulnDetailCache.clear();
@@ -3021,13 +2991,13 @@ export const api = {
     return res;
   },
 
-  async acceptVulnerabilityRisk(
+  async acceptDependencyFindingRisk(
     organizationId: string,
     projectId: string,
     osvId: string,
     reason?: string
   ): Promise<{ success: boolean }> {
-    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/accept-risk`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependency-findings/${encodeURIComponent(osvId)}/accept-risk`, {
       method: 'PATCH',
       body: JSON.stringify({ reason }),
     });
@@ -3035,12 +3005,12 @@ export const api = {
     return res;
   },
 
-  async unacceptVulnerabilityRisk(
+  async unacceptDependencyFindingRisk(
     organizationId: string,
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unaccept-risk`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependency-findings/${encodeURIComponent(osvId)}/unaccept-risk`, {
       method: 'PATCH',
     });
     vulnDetailCache.clear();
@@ -3705,13 +3675,13 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/recent-activity`);
   },
 
-  async getProjectVulnerabilityTimeline(
+  async getProjectDependencyFindingTimeline(
     orgId: string,
     projectId: string,
     days?: number
   ): Promise<{ timeline: { date: string; detected: number; resolved: number }[] }> {
     const q = days != null ? `?days=${days}` : '';
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/vulnerability-timeline${q}`);
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/dependency-finding-timeline${q}`);
   },
 
   async triggerProjectSync(
@@ -5841,7 +5811,7 @@ export interface ReachableFlow {
   flow_signature_hash?: string | null;
 
   // Server-computed from a LEFT JOIN against project_reachable_flow_suppressions
-  // on the GET /vulnerabilities/:osvId/detail endpoint — the row itself stays
+  // on the GET /dependency-findings/:osvId/detail endpoint — the row itself stays
   // derived (the suppression lives in a separate user-state table).
   is_suppressed?: boolean;
 }

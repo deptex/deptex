@@ -14,7 +14,7 @@ jest.mock('../../lib/supabase', () => ({
   createUserClient: jest.fn(),
 }));
 
-// Phase 1 (findings-tab-perf): the SCA vulnerabilities endpoint replaced a
+// Phase 1 (findings-tab-perf): the SCA dependency-findings endpoint replaced a
 // `count(exact, head)` over project_dependency_findings — which makes
 // the DB tally every matching CVE just to compare against zero — with a
 // single-row existence probe (`select id … limit 1`). These tests pin that the
@@ -25,7 +25,7 @@ const mockUser = { id: 'user-1', email: 'henry@example.com' };
 const token = 'valid-token';
 const orgId = 'org-A';
 const projectId = 'proj-1';
-const url = `/api/organizations/${orgId}/projects/${projectId}/vulnerabilities`;
+const url = `/api/organizations/${orgId}/projects/${projectId}/dependency-findings`;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -47,7 +47,7 @@ beforeEach(() => {
   setTableResponse('projects', 'single', { data: { active_extraction_run_id: 'run-1' }, error: null });
 });
 
-describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => {
+describe('GET /dependency-findings — SCA branch-selection probe (Phase 1)', () => {
   it('uses a limit(1) existence probe, not a full count, to pick the branch', async () => {
     // ≥1 PDV row → PDV branch.
     setTableResponse('project_dependency_findings', 'then', {

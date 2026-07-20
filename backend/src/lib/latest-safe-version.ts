@@ -7,7 +7,7 @@ import {
   setCached,
   CACHE_TTL_SECONDS,
 } from './cache';
-import { getVulnCountsForVersionsBatch, getVulnCountsBatch, exceedsThreshold as vulnExceedsThreshold } from '../lib/vuln-counts';
+import { getVulnCountsForVersionsBatch, getVulnCountsBatch, exceedsThreshold as vulnExceedsThreshold } from '../lib/findings-counts';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 
 export interface LatestSafeVersionResponse {

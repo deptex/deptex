@@ -181,7 +181,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
     let cancelled = false;
     setVulnDetail({ key: detailKey, status: 'loading', data: null });
     api
-      .getVulnerabilityDetail(orgIdForState, fix!.projectId, findingId!)
+      .getDependencyFindingDetail(orgIdForState, fix!.projectId, findingId!)
       .then((d) => {
         if (!cancelled) setVulnDetail({ key: detailKey, status: 'loaded', data: d });
       })

@@ -3030,7 +3030,7 @@ export default function OrganizationOverviewPage() {
     if (projectVulnDetailByRowId[rowId]?.loading || projectVulnDetailByRowId[rowId]?.data) return;
     setProjectVulnDetailByRowId((prev) => ({ ...prev, [rowId]: { loading: true, error: null, data: null } }));
     try {
-      const detail = await api.getVulnerabilityDetail(orgId, selectedProjectId, osvId);
+      const detail = await api.getDependencyFindingDetail(orgId, selectedProjectId, osvId);
       setProjectVulnDetailByRowId((prev) => ({ ...prev, [rowId]: { loading: false, error: null, data: detail } }));
     } catch (e: any) {
       setProjectVulnDetailByRowId((prev) => ({
@@ -4121,7 +4121,7 @@ export default function OrganizationOverviewPage() {
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
                             void Promise.all([
-                              api.getProjectVulnerabilities(orgId, selectedProjectId),
+                              api.getProjectDependencyFindings(orgId, selectedProjectId),
                               api.getProjectSecretFindings(orgId, selectedProjectId, 1, 50),
                               api.getProjectSemgrepFindings(orgId, selectedProjectId, 1, 50),
                             ])

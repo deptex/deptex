@@ -35,8 +35,8 @@ jest.mock('pacote', () => ({
 // Vuln counts: mock so latest-safe-version tests don't depend on supabase then-order
 let supplyChainVulnBatchOverride: ((versions: string[]) => Map<string, { critical_vulns: number; high_vulns: number; medium_vulns: number; low_vulns: number }>) | null = null;
 let supplyChainVulnBatchPairsOverride: ((pairs: Array<{ dependencyId: string; version: string }>) => Map<string, { critical_vulns: number; high_vulns: number; medium_vulns: number; low_vulns: number }>) | null = null;
-jest.mock('../../lib/vuln-counts', () => {
-  const real = jest.requireActual('../../lib/vuln-counts') as {
+jest.mock('../../lib/findings-counts', () => {
+  const real = jest.requireActual('../../lib/findings-counts') as {
     getVulnCountsForVersionsBatch: (sb: any, depId: string, versions: string[]) => Promise<Map<string, { critical_vulns: number; high_vulns: number; medium_vulns: number; low_vulns: number }>>;
     getVulnCountsBatch: (sb: any, pairs: Array<{ dependencyId: string; version: string }>) => Promise<Map<string, { critical_vulns: number; high_vulns: number; medium_vulns: number; low_vulns: number }>>;
     getVulnCountsForVersion: (...args: any[]) => Promise<any>;

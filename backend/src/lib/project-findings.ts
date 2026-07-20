@@ -23,7 +23,7 @@ const NO_ACTIVE_RUN = '__no_active_run__';
 
 // ---------------------------------------------------------------------------
 // 1. Dependency (SCA) vulnerabilities
-//    Source: projects.ts GET .../vulnerabilities
+//    Source: projects.ts GET .../dependency-findings
 // ---------------------------------------------------------------------------
 
 /** ⚠️ ACCESS-FREE — see file banner. Gate with checkProjectAccess first. */

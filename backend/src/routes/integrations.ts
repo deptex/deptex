@@ -20,7 +20,7 @@ import { registerJiraWebhook, refreshAllJiraWebhooks } from '../lib/trackers';
 import { isValidInternalKey } from '../middleware/internal-key';
 import { invalidateProjectCaches, invalidateOrgRepositoriesCache } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
-import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
+import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/findings-counts';
 import { detectAffectedWorkspaces, isFileInWorkspace, type EcosystemId } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';
 import * as crypto from 'crypto';

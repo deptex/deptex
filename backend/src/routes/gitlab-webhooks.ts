@@ -12,7 +12,7 @@ import { invalidateProjectCaches } from '../lib/cache';
 import { detectAffectedWorkspaces, isFileInWorkspace } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';
 import { runPRCheck } from '../lib/policy-engine';
-import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
+import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/findings-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 
 const router = express.Router();
