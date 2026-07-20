@@ -2,7 +2,7 @@
 //
 // After a Nuclei scan commits its findings, this wraps the
 // confirm_pdvs_from_dast_run RPC — which flips matching
-// project_dependency_vulnerabilities rows to reachability_level='confirmed'
+// project_dependency_findings rows to reachability_level='confirmed'
 // when a Nuclei finding both resolves to the PDV's dependency and its cve-id
 // array intersects the PDV's osv_id / aliases.
 //

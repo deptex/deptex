@@ -181,7 +181,7 @@ async function testCarryForwardSuppression(): Promise<void> {
 
   // Seed the PREV-run PDV with suppressed=true
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, suppressed_by, suppressed_at, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${OLD_PD_ID}', 'CVE-2021-23337', 'high', '${PREV_RUN}', 'open', true, '${USER_ID}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NOW());
@@ -190,7 +190,7 @@ async function testCarryForwardSuppression(): Promise<void> {
   // Seed the NEW-run PDV with default state (suppressed=false) — carry-forward
   // should flip it back to suppressed=true.
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${NEW_PD_ID}', 'CVE-2021-23337', 'high', '${NEW_RUN}', 'open', false, NOW(), NOW());
@@ -200,7 +200,7 @@ async function testCarryForwardSuppression(): Promise<void> {
 
   const { rows } = await db.query<{ suppressed: boolean; suppressed_by: string | null; detected_at: string }>(
     `SELECT suppressed, suppressed_by, detected_at
-     FROM project_dependency_vulnerabilities
+     FROM project_dependency_findings
      WHERE project_id = $1 AND extraction_run_id = $2`,
     [PROJECT_ID, NEW_RUN],
   );
@@ -238,7 +238,7 @@ async function testFirstRunDetectedEvents(): Promise<void> {
     VALUES ('${PD_ID}', '${PROJECT_ID}', 'lodash', '4.17.21', true, 'dependencies', '${RUN}', NOW());
   `);
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${PD_ID}', 'CVE-2021-23337', 'high',     '${RUN}', 'open', NOW(), NOW()),
@@ -249,7 +249,7 @@ async function testFirstRunDetectedEvents(): Promise<void> {
   assert((summary.vulns_new as number) === 2, `summary.vulns_new = 2 (got ${summary.vulns_new})`);
 
   const events = await db.query<{ event_type: string; osv_id: string }>(
-    `SELECT event_type, osv_id FROM project_vulnerability_events WHERE project_id = $1 ORDER BY osv_id`,
+    `SELECT event_type, osv_id FROM project_dependency_finding_events WHERE project_id = $1 ORDER BY osv_id`,
     [PROJECT_ID],
   );
   assert(events.rows.length === 2, `two events written (got ${events.rows.length})`);
@@ -332,7 +332,7 @@ async function testMonorepoMultiVersionNoCrossSwap(): Promise<void> {
 
   // Prev run: PD_20's PDV is suppressed by Alice; PD_21's is not.
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, suppressed_by, suppressed_at, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${PREV_RUN}', 'open', true,  '${ALICE}', NOW(), NOW(), NOW()),
@@ -341,7 +341,7 @@ async function testMonorepoMultiVersionNoCrossSwap(): Promise<void> {
 
   // New run: both PDVs re-inserted with default (unsuppressed) state.
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${NEW_RUN}', 'open', false, NOW(), NOW()),
@@ -352,7 +352,7 @@ async function testMonorepoMultiVersionNoCrossSwap(): Promise<void> {
 
   const { rows } = await db.query<{ project_dependency_id: string; suppressed: boolean; suppressed_by: string | null }>(
     `SELECT project_dependency_id, suppressed, suppressed_by
-     FROM project_dependency_vulnerabilities
+     FROM project_dependency_findings
      WHERE project_id = $1 AND extraction_run_id = $2
      ORDER BY project_dependency_id`,
     [PROJECT_ID, NEW_RUN],
@@ -402,7 +402,7 @@ async function testMonorepoSameCveTwoPDsEmitTwoEvents(): Promise<void> {
       ('${PD_21}', '${PROJECT_ID}', 'lodash', '4.17.21', false, 'dependencies', '${RUN}', NOW());
   `);
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
     VALUES
       ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${RUN}', 'open', NOW(), NOW()),
@@ -413,7 +413,7 @@ async function testMonorepoSameCveTwoPDsEmitTwoEvents(): Promise<void> {
 
   const events = await db.query<{ event_type: string; project_dependency_id: string | null }>(
     `SELECT event_type, project_dependency_id
-     FROM project_vulnerability_events
+     FROM project_dependency_finding_events
      WHERE project_id = $1 AND osv_id = 'CVE-2021-23337'
      ORDER BY project_dependency_id`,
     [PROJECT_ID],

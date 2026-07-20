@@ -391,7 +391,7 @@ async function matchPromptsToFlows(
 }
 
 // ---------------------------------------------------------------------------
-// Update reachability levels on project_dependency_vulnerabilities
+// Update reachability levels on project_dependency_findings
 // ---------------------------------------------------------------------------
 
 /**
@@ -896,7 +896,7 @@ export async function updateReachabilityLevels(
   options: UpdateReachabilityOptions = {},
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('id, project_dependency_id, osv_id, aliases, summary')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
@@ -2451,7 +2451,7 @@ export async function updateReachabilityLevels(
   for (let i = 0; i < pdvUpdates.length; i += 100) {
     const chunk = pdvUpdates.slice(i, i + 100);
     const { error: updateErr } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .upsert(chunk, { onConflict: 'id' });
     if (updateErr) {
       console.error(

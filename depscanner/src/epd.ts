@@ -15,7 +15,7 @@ export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFL
  * any new value must be added in BOTH places (and to `EntryPointBadge.tsx`'s
  * `STATUS_HINT` Record). The pre-launch direct-rewrite policy means we don't
  * keep a compatibility shim; the worker writes one of these strings to
- * `project_dependency_vulnerabilities.epd_status`.
+ * `project_dependency_findings.epd_status`.
  *
  * Status precedence (used by `aggregateEpdFromFlows` when picking the worst
  * per-flow status to surface on the PDV — locked, also documented in
@@ -931,7 +931,7 @@ export async function applyEpdScoringFallback(
   }
 
   let pdvQuery = supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('id, project_dependency_id, osv_id, is_reachable, reachability_level, depscore, base_depscore_no_reachability, severity, summary')
     .eq('project_id', projectId);
   // R2: scope to this extraction run so stale prior-run PDVs don't contaminate
@@ -1545,7 +1545,7 @@ ${sourceContext || 'none'}`;
   for (let i = 0; i < upsertRows.length; i += 100) {
     const chunk = upsertRows.slice(i, i + 100);
     const { error: upErr } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .upsert(chunk, { onConflict: 'id' });
     if (upErr) {
       updateFailures += chunk.length;

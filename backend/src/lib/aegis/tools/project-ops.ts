@@ -100,7 +100,7 @@ registerAegisTool(
       const [{ count: depCount }, { count: vulnCount }, { count: semgrepCount }] = await Promise.all([
         supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).eq('project_id', projectId).is('removed_at', null),
         supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('id', { count: 'exact', head: true })
           .eq('project_id', projectId)
           .eq('extraction_run_id', activeRunId)
@@ -200,7 +200,7 @@ registerAegisTool(
     execute: async ({ projectId, severity, reachabilityLevel, limit = 50 }) => {
       const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       let query = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(`
           id,
           osv_id,
@@ -364,7 +364,7 @@ registerAegisTool(
       const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const [vulnRes, semgrepRes, secretRes, depRes, complRes] = await Promise.all([
         supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('severity')
           .eq('project_id', projectId)
           .eq('extraction_run_id', activeRunId)

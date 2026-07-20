@@ -118,7 +118,7 @@ function seed(
     usageStrings?: string[];
   } = {},
 ) {
-  fsk.set('project_dependency_vulnerabilities', [
+  fsk.set('project_dependency_findings', [
     { id: PDV_ID, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: 'CVE-2024-0001' },
   ]);
   fsk.set('project_dependencies', [
@@ -156,7 +156,7 @@ function seed(
 
 function verdictOf(fsk: FakeStorage): { level?: string; details?: any } {
   const u = fsk.updates.find(
-    (x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === PDV_ID,
+    (x) => x.table === 'project_dependency_findings' && x.filter.id === PDV_ID,
   );
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }

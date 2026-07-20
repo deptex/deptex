@@ -357,7 +357,7 @@ describe('get_project_vulnerabilities', () => {
 
   it('returns empty array when there are no vulnerabilities', async () => {
     mockProjectResolverHit('Web');
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
     const out = (await tool('get_project_vulnerabilities').execute(
       { projectName: 'Web' },
       makeCtx(),
@@ -367,7 +367,7 @@ describe('get_project_vulnerabilities', () => {
 
   it('hydrates dependency info for each vulnerability without leaking row IDs', async () => {
     mockProjectResolverHit('Web');
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [
         {
           id: VULN_ID,
@@ -417,7 +417,7 @@ describe('get_project_vulnerabilities', () => {
     // Without these filters the same CVE comes back once per historical run
     // (the "top 3 CVEs are all the same CVE" dogfood bug).
     mockProjectResolverHit('Web');
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
     queryBuilder.eq.mockClear();
     await tool('get_project_vulnerabilities').execute({ projectName: 'Web' }, makeCtx());
     expect(queryBuilder.eq.mock.calls).toEqual(
@@ -444,7 +444,7 @@ describe('get_security_posture', () => {
       ],
       error: null,
     });
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [
         { severity: 'critical', is_reachable: true, cisa_kev: true, depscore: 95 },
         { severity: 'high', is_reachable: false, cisa_kev: false, depscore: 70 },
@@ -472,7 +472,7 @@ describe('get_vulnerability_detail', () => {
 
   it('returns not-found when no rows match', async () => {
     setTableResponse('projects', 'then', { data: [{ id: 'p1', name: 'Web' }], error: null });
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
     const out = (await tool('get_vulnerability_detail').execute(
       { cveOrOsvId: 'GHSA-zzzz' },
       makeCtx(),
@@ -493,7 +493,7 @@ describe('get_reachability_flows', () => {
 
   it('returns vuln-not-found when CVE missing in resolved project', async () => {
     mockProjectResolverHit('Web');
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
     const out = (await tool('get_reachability_flows').execute(
       { projectName: 'Web', cveOrOsvId: 'CVE-9999' },
       makeCtx(),
@@ -515,7 +515,7 @@ describe('check_cisa_kev', () => {
       data: [{ id: 'p1' }, { id: 'p2' }],
       error: null,
     });
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [
         { osv_id: 'GHSA-aaaa', cisa_kev: false, aliases: ['CVE-2024-1'] },
         { osv_id: 'GHSA-aaaa', cisa_kev: true, aliases: ['CVE-2024-1'] },
@@ -530,7 +530,7 @@ describe('check_cisa_kev', () => {
 describe('get_epss_score', () => {
   it('returns the highest epss score across matched rows', async () => {
     setTableResponse('projects', 'then', { data: [{ id: 'p1' }], error: null });
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [
         { osv_id: 'GHSA-aaaa', epss_score: 0.4, aliases: [] },
         { osv_id: 'GHSA-aaaa', epss_score: 0.7, aliases: [] },
@@ -548,7 +548,7 @@ describe('get_epss_score', () => {
 
   it('errors when no rows match the id', async () => {
     setTableResponse('projects', 'then', { data: [{ id: 'p1' }], error: null });
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
     const out = (await tool('get_epss_score').execute(
       { cveOrOsvId: 'GHSA-missing' },
       makeCtx(),
@@ -692,13 +692,13 @@ describe('list_policies', () => {
 });
 
 describe('request_fix set-aside guard', () => {
-  // The PDV row request_fix consults: project_dependency_vulnerabilities
+  // The PDV row request_fix consults: project_dependency_findings
   // maybeSingle. Dedup pre-checks need a project_security_fixes maybeSingle
   // miss; resolveProject needs a projects hit.
   function seedRequestFixPath(pdvRow: Record<string, any> | null) {
     mockProjectResolverHit('Web');
     setTableResponse('project_security_fixes', 'maybeSingle', { data: null, error: null });
-    setTableResponse('project_dependency_vulnerabilities', 'maybeSingle', {
+    setTableResponse('project_dependency_findings', 'maybeSingle', {
       data: pdvRow,
       error: null,
     });
@@ -811,7 +811,7 @@ describe('list_project_issues auto-ignore triage', () => {
 
   function seedIssues() {
     mockProjectResolverHit('Web');
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [REACHABLE_ROW, UNREACHABLE_ROW],
       error: null,
     });

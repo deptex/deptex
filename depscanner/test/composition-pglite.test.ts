@@ -99,7 +99,7 @@ interface SeedPdv {
 }
 async function insertPdv(storage: any, projId: string, p: SeedPdv): Promise<string> {
   const id = randomUUID();
-  const res = await storage.from('project_dependency_vulnerabilities').insert({
+  const res = await storage.from('project_dependency_findings').insert({
     id,
     project_id: projId,
     project_dependency_id: p.projectDependencyId,
@@ -215,7 +215,7 @@ async function main(): Promise<void> {
     assert(sum.edges_written === 1, `edges_written=${sum.edges_written}`);
     assert(sum.pdvs_updated === 1, `pdvs_updated=${sum.pdvs_updated}`);
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(Number(pdv.composition_factor) === 1, `composition_factor=1.0 (got ${pdv.composition_factor})`);
     assert(Number(pdv.contextual_depscore) === 70, `contextual_depscore unchanged (got ${pdv.contextual_depscore})`);
   }
@@ -239,7 +239,7 @@ async function main(): Promise<void> {
     await insertBinding(supabase, projId, 'os', 'libssl3', 'libssl.so.3', null, runId);
     await composeFindings({ supabase, projectId: projId, organizationId: orgId, runId, logger: noopLogger });
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(Number(pdv.composition_factor) === 0.36, `factor=0.36 (got ${pdv.composition_factor})`);
     assert(Number(pdv.contextual_depscore) === 25.2, `70 × 0.36 = 25.2 (got ${pdv.contextual_depscore})`);
   }
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
     await insertBinding(supabase, projId, 'os', 'libssl3', 'libssl.so.3', null, runId);
     await composeFindings({ supabase, projectId: projId, organizationId: orgId, runId, logger: noopLogger });
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(Number(pdv.composition_factor) === 0, `factor=0 (got ${pdv.composition_factor})`);
     assert(Number(pdv.contextual_depscore) === 0, `contextual_depscore=0 (got ${pdv.contextual_depscore})`);
   }
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     });
     assert(sum.edges_written === 2, `2 edges (got ${sum.edges_written})`);
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(Number(pdv.composition_factor) === 0.4, `MIN factor=0.4 (got ${pdv.composition_factor})`);
     assert(Number(pdv.contextual_depscore) === 28, `70 × 0.4 = 28 (got ${pdv.contextual_depscore})`);
   }
@@ -322,7 +322,7 @@ async function main(): Promise<void> {
     assert(sum.edges_skipped_unknown_reachability === 1, `skipped=1 (got ${sum.edges_skipped_unknown_reachability})`);
     assert(sum.edges_written === 0, `no edge written`);
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(pdv.composition_factor === null, `composition_factor=null`);
     assert(Number(pdv.contextual_depscore) === 60, `contextual_depscore=60 unchanged`);
   }
@@ -348,7 +348,7 @@ async function main(): Promise<void> {
     });
     assert(sum.edges_written === 0, `no edge (got ${sum.edges_written})`);
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(pdv.composition_factor === null, `composition_factor stays null`);
     assert(Number(pdv.contextual_depscore) === 50, `contextual_depscore untouched`);
   }
@@ -382,7 +382,7 @@ async function main(): Promise<void> {
   //
   // The phase30 RPC exposed a raw `composition_factor` column, but phase60
   // (status fields) + phase63 (scoped npm name) rewrote
-  // get_project_vulnerabilities_from_pdv and dropped that column — it has no
+  // get_project_dependency_findings_from_pdv and dropped that column — it has no
   // consumer; the composition result reaches the UI through the FOLDED
   // contextual_depscore, not the raw factor. The RPC also filters on the
   // project's active_extraction_run_id (phase24.3). So the live, consumed
@@ -393,7 +393,7 @@ async function main(): Promise<void> {
   {
     // run-s2 was folded 70 → 25.2 (factor 0.36) and is never re-touched.
     await supabase.from('projects').update({ active_extraction_run_id: 'run-s2' }).eq('id', projId);
-    const { data } = await supabase.rpc('get_project_vulnerabilities_from_pdv', {
+    const { data } = await supabase.rpc('get_project_dependency_findings_from_pdv', {
       p_project_id: projId,
     });
     assert(Array.isArray(data), 'RPC returns array');
@@ -420,7 +420,7 @@ async function main(): Promise<void> {
       supabase, projectId: projId, organizationId: orgId, runId, logger: noopLogger,
     });
     assert(sum.edges_written === 0, 'no edge');
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(pdv.composition_factor === null, 'composition_factor null');
     assert(Number(pdv.contextual_depscore) === 33.3333, `33.3333 preserved (got ${pdv.contextual_depscore})`);
   }
@@ -483,7 +483,7 @@ async function main(): Promise<void> {
     });
     assert(Number(rpcCount) === 0, `cross-tenant RPC affects 0 rows (got ${rpcCount})`);
 
-    const { data: pdv } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
+    const { data: pdv } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', pdvId).single();
     assert(pdv.composition_factor === null, 'composition_factor still null after foreign-tenant RPC call');
     assert(Number(pdv.contextual_depscore) === 90, 'contextual_depscore unchanged');
   }
@@ -509,7 +509,7 @@ async function main(): Promise<void> {
       supabase, projectId: projId, organizationId: orgId, runId, logger: noopLogger,
     });
     for (const { id, orig } of ids) {
-      const { data } = await supabase.from('project_dependency_vulnerabilities').select('composition_factor, contextual_depscore').eq('id', id).single();
+      const { data } = await supabase.from('project_dependency_findings').select('composition_factor, contextual_depscore').eq('id', id).single();
       if (data.composition_factor !== null || Number(data.contextual_depscore) !== orig) {
         assert(false, `PDV ${id.slice(0, 8)} drifted (orig=${orig}, got cf=${data.composition_factor} ds=${data.contextual_depscore})`);
         break;

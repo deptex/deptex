@@ -109,7 +109,7 @@ const getProjectSummary: AegisToolEntry<{ projectName: string }> = {
         .eq('project_id', resolved.id)
         .is('removed_at', null),
       ctx.supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('id', { count: 'exact', head: true })
         .eq('project_id', resolved.id)
         .eq('extraction_run_id', activeRunId)

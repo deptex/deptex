@@ -906,7 +906,7 @@ export async function evaluateProjectPolicies(
   const depContextForStatus = await Promise.all(
     (enrichedDeps ?? []).map(async (dep: any) => {
       const { data: vulns } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, severity, cvss_score, epss_score, depscore, is_reachable, cisa_kev, fixed_versions, summary')
         .eq('project_dependency_id', dep.id)
         .eq('extraction_run_id', activeRunId);

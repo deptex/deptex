@@ -105,7 +105,7 @@ async function fetchPdvScoresByOsvForDependency(
   >
 > {
   const { data, error } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('osv_id, depscore, contextual_depscore, entry_point_classification, epd_status, epss_score, cvss_score, cisa_kev, is_reachable')
     .eq('project_id', projectId)
     .eq('project_dependency_id', projectDependencyId)
@@ -4805,9 +4805,9 @@ async function fetchEnrichedDependenciesForProject(
         ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
-      // Max-depscore source (project_dependency_vulnerabilities) — independent of the other
+      // Max-depscore source (project_dependency_findings) — independent of the other
       // Wave-1 reads, so fetch it here instead of in its own sequential round trip below.
-      supabase.from('project_dependency_vulnerabilities').select('project_dependency_id, depscore').eq('project_id', projectId).eq('suppressed', false).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
+      supabase.from('project_dependency_findings').select('project_dependency_id, depscore').eq('project_id', projectId).eq('suppressed', false).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
     ]);
     const t1 = debugTiming ? Date.now() : 0;
     if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
@@ -4841,7 +4841,7 @@ async function fetchEnrichedDependenciesForProject(
     let vulnCountsByKey = new Map<string, VulnCounts>();
     const t2 = debugTiming ? Date.now() : 0;
 
-    // Max depscore per project_dependency_id — from project_dependency_vulnerabilities (project-specific, includes reachability/tier)
+    // Max depscore per project_dependency_id — from project_dependency_findings (project-specific, includes reachability/tier)
     const maxDepscoreByPdId = new Map<string, number>();
     {
       // Prefetched in Wave 1 above (no extra round trip here).
@@ -6186,7 +6186,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const childVersionIds = (childEdges || []).map((e: any) => e.child_version_id);
 
     const BATCH_SIZE = 100;
-    /** Reachability-assessed vulnerability from project_dependency_vulnerabilities (the scan), not the raw advisory registry. */
+    /** Reachability-assessed vulnerability from project_dependency_findings (the scan), not the raw advisory registry. */
     type PdvVuln = {
       osv_id: string;
       severity: string;
@@ -6238,7 +6238,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     };
 
     /**
-     * Overlay the project's actual scan findings (project_dependency_vulnerabilities) onto the
+     * Overlay the project's actual scan findings (project_dependency_findings) onto the
      * supply-chain view. Mirrors the findings route: when the active extraction run has PDV rows,
      * PDV is the source of truth (reachability-assessed, depscore-scored, suppressed excluded);
      * the raw advisory-by-version match stays as the fallback for versions this project hasn't
@@ -6249,7 +6249,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       const activeRunId = await getActiveExtractionId(supabase, projectId);
       if (!activeRunId) return empty;
       const { count: pdvCount } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('*', { count: 'exact', head: true })
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId);
@@ -6277,7 +6277,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       for (let i = 0; i < pdIds.length; i += BATCH_SIZE) {
         const batch = pdIds.slice(i, i + BATCH_SIZE);
         const { data: pdvRows } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('project_dependency_id, osv_id, severity, summary, aliases, depscore, reachability_level, is_reachable, cvss_score, epss_score, cisa_kev')
           .eq('project_id', projectId)
           .eq('extraction_run_id', activeRunId)
@@ -7141,7 +7141,7 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     }
 
     // No finalized extraction run (scan never completed, or crashed mid-run).
-    // Returning the legacy run-unscoped `get_project_vulnerabilities` RPC inside
+    // Returning the legacy run-unscoped `get_project_dependency_findings` RPC inside
     // the builder would surface ORPHANED vulns from a partial run — rows with no
     // depscore / reachability that 404 on expand ("not in project"). There is
     // nothing valid to show until a run finalizes; the UI renders an
@@ -9862,7 +9862,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
     // max(access, rpc) instead of a ~10-query waterfall.
     const [accessCheck, bundleRes] = await Promise.all([
       checkProjectAccess(userId, id, projectId),
-      supabase.rpc('get_vulnerability_detail_bundle', {
+      supabase.rpc('get_dependency_finding_detail_bundle', {
         p_project_id: projectId,
         p_osv_id: osvId,
       }),
@@ -9921,7 +9921,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         suppressed: true,
         suppressed_by: userId,
@@ -9935,7 +9935,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'suppressed',
@@ -9968,7 +9968,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({ suppressed: false, suppressed_by: null, suppressed_at: null })
       .eq('project_id', projectId)
       .eq('osv_id', osvId)
@@ -9976,7 +9976,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'unsuppressed',
@@ -10128,7 +10128,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
 
     const exemptReason = reason?.trim() ? `Risk accepted: ${reason.trim()}` : 'Risk accepted';
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         risk_accepted: true,
         risk_accepted_by: userId,
@@ -10143,7 +10143,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'accepted',
@@ -10176,7 +10176,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         risk_accepted: false,
         risk_accepted_by: null,
@@ -10189,7 +10189,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'risk_unaccepted',
@@ -10235,7 +10235,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const { data: vulns } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, severity, depscore, is_reachable, epss_score, cisa_kev, fixed_versions, suppressed, risk_accepted')
       .eq('project_id', projectId)
       .eq('project_dependency_id', depId)
@@ -10408,7 +10408,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     // Return open + ignored rows (the table filters Open/Ignored/All client-side
     // via the stored status); resolved rows stay hidden.
     let countQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
@@ -10422,7 +10422,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     const to = from + perPage - 1;
 
     let dataQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select(
         'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
       )
@@ -10953,7 +10953,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
       // SQL-aggregate vuln + dep counts (phase64b). Replaces the old client-side counting of the
-      // full project_dependency_vulnerabilities + project_dependencies row sets, which silently
+      // full project_dependency_findings + project_dependencies row sets, which silently
       // truncated at PostgREST's 1000-row cap for any project with >1000 vulns or deps.
       supabase.rpc('project_stats_counts', { p_project_id: projectId, p_active_run_id: activeRunId }).then(r => r.data?.[0] ?? null),
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
@@ -11044,7 +11044,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const vulnByPd = new Map<string, string>();
     if (directDepRowIds.length > 0) {
       const { data: directVulns } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('project_dependency_id, severity')
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId)
@@ -11152,7 +11152,7 @@ router.get('/:id/projects/:projectId/vulnerability-timeline', async (req: AuthRe
     const sinceIso = since.toISOString();
 
     const { data: events } = await supabase
-      .from('project_vulnerability_events')
+      .from('project_dependency_finding_events')
       .select('event_type, created_at')
       .eq('project_id', projectId)
       .gte('created_at', sinceIso)
@@ -11205,7 +11205,7 @@ router.get('/:id/projects/:projectId/recent-activity', async (req: AuthRequest, 
         .order('created_at', { ascending: false })
         .limit(20),
       supabase
-        .from('project_vulnerability_events')
+        .from('project_dependency_finding_events')
         .select('id, event_type, osv_id, metadata, created_at')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false })

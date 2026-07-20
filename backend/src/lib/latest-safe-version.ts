@@ -189,7 +189,7 @@ export async function calculateLatestSafeVersion(
   // based on stale findings from prior runs still living in the DB until reaped.
   const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const { data: pdvRows } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('osv_id, severity, fixed_versions')
     .eq('project_dependency_id', projectDependencyId)
     .eq('extraction_run_id', activeRunId)

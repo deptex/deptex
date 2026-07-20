@@ -3060,7 +3060,7 @@ router.post('/:id/sla-policies/disable', async (req: AuthRequest, res) => {
       const activeRunIds = await getActiveExtractionIds(supabase, ids);
       if (activeRunIds.length > 0) {
         const { error: clearErr } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .update({
             detected_at: null,
             sla_deadline_at: null,
@@ -3141,7 +3141,7 @@ router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
     const pdvSelect = 'id, project_id, severity, sla_status, sla_deadline_at, sla_met_at, sla_breached_at, detected_at, osv_id, created_at';
     const { data: allPdv } = activeRunIds.length > 0
       ? await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select(pdvSelect)
           .in('project_id', projectIds)
           .in('extraction_run_id', activeRunIds)
@@ -3299,7 +3299,7 @@ router.get('/:id/sla-compliance/export', async (req: AuthRequest, res) => {
 
     const { data: allPdv } = activeRunIds.length > 0
       ? await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('id, project_id, osv_id, severity, sla_status, detected_at, sla_deadline_at, sla_met_at, sla_breached_at, created_at')
           .in('project_id', projectIds)
           .in('extraction_run_id', activeRunIds)
@@ -6473,7 +6473,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     let topVulns: any[] = [];
     if (projectIds.length > 0 && activeRunIds.length > 0) {
       const { data: vulns } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('severity, depscore, project_id, project_dependency_id')
         .in('project_id', projectIds)
         .in('extraction_run_id', activeRunIds)
@@ -6489,7 +6489,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
 
       // Top 5 critical/high vulns by depscore
       const { data: topVulnRows } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, severity, depscore, project_id')
         .in('project_id', projectIds)
         .in('extraction_run_id', activeRunIds)
@@ -6573,7 +6573,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
     if (projectIds.length > 0 && activeRunIds.length > 0) {
       const { data: pdvSla } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('sla_status')
         .in('project_id', projectIds)
         .in('extraction_run_id', activeRunIds);

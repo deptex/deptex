@@ -212,7 +212,7 @@ export async function resolveProjectVulnerability(
 
   const baseQuery = () =>
     supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id, osv_id')
       .eq('project_id', project.id)
       .eq('extraction_run_id', activeRunId)

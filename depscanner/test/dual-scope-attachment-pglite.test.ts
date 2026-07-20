@@ -143,7 +143,7 @@ async function main() {
 
     // Land an actual reachable PDV on the resolved id and read it back —
     // proves the FK accepts it and the vuln sits on the production row.
-    const { error: vulnErr } = await storage.from('project_dependency_vulnerabilities').insert({
+    const { error: vulnErr } = await storage.from('project_dependency_findings').insert({
       project_id: PROJECT_A,
       project_dependency_id: resolved,
       osv_id: 'CVE-2021-23337',
@@ -152,7 +152,7 @@ async function main() {
     });
     assert(vulnErr === null, `insert PDV onto resolved row (error=${vulnErr?.message ?? 'null'})`);
     const { data: pdvRows } = await storage
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('project_dependency_id')
       .eq('project_id', PROJECT_A);
     assert(

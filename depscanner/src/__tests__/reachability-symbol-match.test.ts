@@ -109,7 +109,7 @@ function seed(
     edges?: Array<{ parent_version_id: string; child_version_id: string }>;
   } = {},
 ) {
-  fs.set('project_dependency_vulnerabilities', [
+  fs.set('project_dependency_findings', [
     { id: PDV_ID, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: CVE },
   ]);
   fs.set('project_dependencies', [
@@ -146,7 +146,7 @@ function seed(
 }
 
 function levelOf(fs: FakeStorage): string | undefined {
-  return fs.updates.find((u) => u.table === 'project_dependency_vulnerabilities' && u.filter.id === PDV_ID)
+  return fs.updates.find((u) => u.table === 'project_dependency_findings' && u.filter.id === PDV_ID)
     ?.values.reachability_level;
 }
 

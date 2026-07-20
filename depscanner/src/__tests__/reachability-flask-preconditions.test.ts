@@ -228,7 +228,7 @@ const P_ID = 'proj-f'; const R_ID = 'run-f';
 
 /** Seed one pypi dep + one PDV. is_direct:true + files_importing 0 → the classifier floors it at orphan_transitive_unreachable. */
 function seedDep(fsk: FakeStorage, opts: { name: string; osvId: string; summary: string; isDirect: boolean }) {
-  fsk.set('project_dependency_vulnerabilities', [
+  fsk.set('project_dependency_findings', [
     { id: 'pdv-1', project_dependency_id: 'pd-1', project_id: P_ID, extraction_run_id: R_ID, osv_id: opts.osvId, aliases: [], summary: opts.summary },
   ]);
   fsk.set('project_dependencies', [
@@ -240,7 +240,7 @@ function seedDep(fsk: FakeStorage, opts: { name: string; osvId: string; summary:
   fsk.set('project_usage_slices', []);
 }
 function levelOf(fsk: FakeStorage): { level?: string; details?: any } {
-  const u = fsk.updates.find((x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === 'pdv-1' && 'reachability_level' in x.values);
+  const u = fsk.updates.find((x) => x.table === 'project_dependency_findings' && x.filter.id === 'pdv-1' && 'reachability_level' in x.values);
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }
 const flaskSignals = (over: Partial<FlaskFeatureSignals> = {}): FlaskFeatureSignals => ({

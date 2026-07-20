@@ -403,7 +403,7 @@ export function fallbackUnresolvedResolveDep(flow: Flow): ResolvedDep {
 
 /**
  * Phase 6.5 — `osv_id → ResolvedDep` resolver factory. Used by pipeline.ts:
- * the caller builds `depsByOsvId` from `project_dependency_vulnerabilities`
+ * the caller builds `depsByOsvId` from `project_dependency_findings`
  * + `project_dependencies` joined on this extraction's PDV rows, then wraps
  * the map in this helper before passing to writeFlows. CVE-tagged flows
  * resolve to their real (dependencyId, purl); framework-generic flows (no

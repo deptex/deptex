@@ -5,7 +5,7 @@
  *   - Marks deps missing from this run as removed_at = NOW()
  *   - Carries forward PDV user state (status, suppressed, SLA, re_review_reasons) by (dep_name, osv_id)
  *   - Detects re-review triggers (depscore/severity/reachability/KEV/EPSS/direct/env deltas)
- *   - Writes 'detected'/'reopened'/'rereview_triggered' events to project_vulnerability_events
+ *   - Writes 'detected'/'reopened'/'rereview_triggered' events to project_dependency_finding_events
  *   - Carries forward semgrep status (by fingerprint, falls back to tuple) and secret status
  *   - Computes SLA deadlines for newly-detected findings via tier-aware get_effective_sla_policy
  *   - Flips active_extraction_run_id → this run, previous → old active

@@ -20,7 +20,7 @@ registerAegisTool(
       const [{ data: project }, { data: deps }, { data: vulns }, { data: semgrep }, { data: secrets }] = await Promise.all([
         supabase.from('projects').select('name, health_score, status_id').eq('id', projectId).single(),
         supabase.from('project_dependencies').select('id, policy_result').eq('project_id', projectId).is('removed_at', null),
-        supabase.from('project_dependency_vulnerabilities').select('osv_id, severity, is_reachable, reachability_level, suppressed').eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('suppressed', false),
+        supabase.from('project_dependency_findings').select('osv_id, severity, is_reachable, reachability_level, suppressed').eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('suppressed', false),
         supabase.from('project_semgrep_findings').select('rule_id, severity, path, message').eq('project_id', projectId).eq('extraction_run_id', activeRunId),
         supabase.from('project_secret_findings').select('rule_id, path').eq('project_id', projectId).eq('extraction_run_id', activeRunId),
       ]);
@@ -125,7 +125,7 @@ registerAegisTool(
       const projectIds = (projects ?? []).map((p: any) => p.id);
       const activeRunIds = await getActiveExtractionIds(supabase, projectIds);
       const [{ count: vulnCount }, { count: compliantCount }] = await Promise.all([
-        projectIds.length && activeRunIds.length ? supabase.from('project_dependency_vulnerabilities').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds).eq('suppressed', false) : { count: 0 },
+        projectIds.length && activeRunIds.length ? supabase.from('project_dependency_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds).eq('suppressed', false) : { count: 0 },
         projectIds.length ? supabase.from('projects').select('id', { count: 'exact', head: true }).eq('organization_id', organizationId).not('status_id', 'is', null) : { count: 0 },
       ]);
       const avgHealth = projects?.length ? (projects as any[]).reduce((a: number, p: any) => a + (p.health_score ?? 0), 0) / projects.length : 0;
@@ -225,7 +225,7 @@ registerAegisTool(
         return JSON.stringify({ overall_compliance_percent: 100, current_breaches: 0, violations_count: 0, message: 'No active extraction runs' });
       }
       const { data: pdvList } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('sla_status, severity, sla_met_at, detected_at, created_at')
         .in('project_id', projectIds)
         .in('extraction_run_id', slaActiveRunIds);

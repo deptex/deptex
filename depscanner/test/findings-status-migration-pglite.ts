@@ -65,7 +65,7 @@ async function seed(db: PGlite): Promise<void> {
 
   // --- SCA: reachability spread + runtime override + legacy suppressed ---
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable, runtime_confirmed_at, suppressed, depscore)
+    INSERT INTO project_dependency_findings (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable, runtime_confirmed_at, suppressed, depscore)
     VALUES
       ('${PROJ}','${DEP}','CVE-UNREACH','high','${RUN}','open','unreachable',true,NULL,false,90),
       ('${PROJ}','${DEP}','CVE-CONFIRMED','high','${RUN}','open','confirmed',true,NULL,false,90),
@@ -128,16 +128,16 @@ async function one(db: PGlite, sql: string, params: unknown[] = []): Promise<Rec
 
 async function assertState(db: PGlite, phase: string): Promise<void> {
   console.log(`\n  [${phase}] SCA`);
-  const unreach = await one(db, `SELECT auto_ignored, auto_ignore_reason, finding_key FROM project_dependency_vulnerabilities WHERE osv_id='CVE-UNREACH'`);
+  const unreach = await one(db, `SELECT auto_ignored, auto_ignore_reason, finding_key FROM project_dependency_findings WHERE osv_id='CVE-UNREACH'`);
   assert(unreach.auto_ignored === true && unreach.auto_ignore_reason === 'not_reachable', 'unreachable -> auto_ignored not_reachable');
   assert(typeof unreach.finding_key === 'string' && (unreach.finding_key as string).length === 64, 'unreachable -> finding_key is a sha256 hex');
-  const conf = await one(db, `SELECT auto_ignored FROM project_dependency_vulnerabilities WHERE osv_id='CVE-CONFIRMED'`);
+  const conf = await one(db, `SELECT auto_ignored FROM project_dependency_findings WHERE osv_id='CVE-CONFIRMED'`);
   assert(conf.auto_ignored === false, 'confirmed -> not auto_ignored');
-  const mod = await one(db, `SELECT auto_ignore_reason FROM project_dependency_vulnerabilities WHERE osv_id='CVE-MODULE'`);
+  const mod = await one(db, `SELECT auto_ignore_reason FROM project_dependency_findings WHERE osv_id='CVE-MODULE'`);
   assert(mod.auto_ignore_reason === 'unconfirmed_reachable', 'module -> unconfirmed_reachable');
-  const rt = await one(db, `SELECT auto_ignored, auto_ignore_reason FROM project_dependency_vulnerabilities WHERE osv_id='CVE-RUNTIME'`);
+  const rt = await one(db, `SELECT auto_ignored, auto_ignore_reason FROM project_dependency_findings WHERE osv_id='CVE-RUNTIME'`);
   assert(rt.auto_ignored === true && rt.auto_ignore_reason === 'not_reachable', 'runtime+unreachable -> stored auto_ignored (read-time override handles effective)');
-  const sup = await one(db, `SELECT status FROM project_dependency_vulnerabilities WHERE osv_id='CVE-SUPPRESSED'`);
+  const sup = await one(db, `SELECT status FROM project_dependency_findings WHERE osv_id='CVE-SUPPRESSED'`);
   assert(sup.status === 'ignored', 'legacy suppressed -> status ignored');
 
   console.log(`  [${phase}] secret + semgrep`);
@@ -186,7 +186,12 @@ async function main() {
   console.log('Seeding finding rows...');
   await seed(db);
 
-  const phase55 = fs.readFileSync(PHASE55_FILE, 'utf8');
+  // phase55 predates phase74's rename (project_dependency_vulnerabilities ->
+  // project_dependency_findings). Replaying it onto the current schema means
+  // mapping the old table name forward; the backfill logic is unchanged.
+  const phase55 = fs
+    .readFileSync(PHASE55_FILE, 'utf8')
+    .replace(/project_dependency_vulnerabilities/g, 'project_dependency_findings');
   console.log('\nApplying phase55 (first run)...');
   await db.exec(phase55);
   await assertState(db, 'after 1st apply');
@@ -198,18 +203,20 @@ async function main() {
   // Triggers (phase55c): a fresh scan's inserts must auto-stamp finding_key +
   // auto_ignored without re-running the backfill, and an auto-ignored finding
   // must auto-reopen when its reachability later improves.
-  const phase55c = fs.readFileSync(PHASE55C_FILE, 'utf8');
+  const phase55c = fs
+    .readFileSync(PHASE55C_FILE, 'utf8')
+    .replace(/project_dependency_vulnerabilities/g, 'project_dependency_findings');
   console.log('\nApplying phase55c (triggers)...');
   await db.exec(phase55c);
 
   console.log('\n  [triggers] fresh insert + auto-reopen');
-  await db.exec(`INSERT INTO project_dependency_vulnerabilities (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable)
+  await db.exec(`INSERT INTO project_dependency_findings (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable)
     VALUES ('${PROJ}','${DEP}','CVE-TRIGGER','high','${RUN}','open','unreachable',true);`);
-  const trig = await one(db, `SELECT finding_key, auto_ignored, auto_ignore_reason FROM project_dependency_vulnerabilities WHERE osv_id='CVE-TRIGGER'`);
+  const trig = await one(db, `SELECT finding_key, auto_ignored, auto_ignore_reason FROM project_dependency_findings WHERE osv_id='CVE-TRIGGER'`);
   assert(typeof trig.finding_key === 'string' && (trig.finding_key as string).length === 64, 'trigger stamps finding_key on a fresh insert (no backfill)');
   assert(trig.auto_ignored === true && trig.auto_ignore_reason === 'not_reachable', 'trigger stamps auto_ignored on a fresh insert');
-  await db.exec(`UPDATE project_dependency_vulnerabilities SET reachability_level='confirmed' WHERE osv_id='CVE-TRIGGER';`);
-  const reopened = await one(db, `SELECT auto_ignored, finding_key FROM project_dependency_vulnerabilities WHERE osv_id='CVE-TRIGGER'`);
+  await db.exec(`UPDATE project_dependency_findings SET reachability_level='confirmed' WHERE osv_id='CVE-TRIGGER';`);
+  const reopened = await one(db, `SELECT auto_ignored, finding_key FROM project_dependency_findings WHERE osv_id='CVE-TRIGGER'`);
   assert(reopened.auto_ignored === false, 'trigger auto-reopens when reachability becomes confirmed');
   assert(reopened.finding_key === trig.finding_key, 'finding_key is stable across updates (computed on INSERT only)');
   await db.exec(`INSERT INTO project_container_findings (project_id, organization_id, extraction_run_id, image_reference, image_digest, image_source, os_package_name, os_package_version, osv_id, is_kev, depscore, status, container_fingerprint)

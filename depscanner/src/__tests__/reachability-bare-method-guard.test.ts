@@ -111,7 +111,7 @@ interface UsageSpec {
  */
 function seed(fs: FakeStorage, depName: string, usages: UsageSpec[]) {
   const CVE = `CVE-2020-${depName}`;
-  fs.set('project_dependency_vulnerabilities', [
+  fs.set('project_dependency_findings', [
     { id: 'pdv-1', project_dependency_id: 'pd-1', project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: CVE },
   ]);
   fs.set('project_dependencies', [
@@ -148,7 +148,7 @@ function seed(fs: FakeStorage, depName: string, usages: UsageSpec[]) {
 
 function verdict(fs: FakeStorage): { level?: string; details?: any } {
   const row = fs.updates.find(
-    (u) => u.table === 'project_dependency_vulnerabilities' && u.filter.id === 'pdv-1',
+    (u) => u.table === 'project_dependency_findings' && u.filter.id === 'pdv-1',
   );
   return { level: row?.values.reachability_level, details: row?.values.reachability_details };
 }

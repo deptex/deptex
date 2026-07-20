@@ -49,8 +49,8 @@ function denyOrgAccess() {
  *  name), so both projects get the same one-row slices — which is exactly what we
  *  want to assert per-project tagging + concatenation. */
 function stubSlicesPopulated() {
-  setTableResponse('project_dependency_vulnerabilities', 'then', { data: [{ id: 'pdv-x' }], error: null });
-  setRpcResponse('get_project_vulnerabilities_from_pdv', {
+  setTableResponse('project_dependency_findings', 'then', { data: [{ id: 'pdv-x' }], error: null });
+  setRpcResponse('get_project_dependency_findings_from_pdv', {
     data: [
       { id: 'v1', osv_id: 'CVE-2024-0001', severity: 'high', dependency_id: 'dep-1', dependency_name: 'lodash', depscore: 80 },
     ],
@@ -147,7 +147,7 @@ describe('GET /teams/:teamId/findings — team findings bundle', () => {
     expect(res.body.projectIds).toEqual([]);
     expect(res.body.vulnerabilities).toEqual([]);
     expect(res.body.degradedSlices).toEqual([]);
-    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_vulnerabilities');
+    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_findings');
   });
 
   it('single access check: a non-member gets 404 (no slice reads)', async () => {
@@ -159,6 +159,6 @@ describe('GET /teams/:teamId/findings — team findings bundle', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found|access/i);
-    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_vulnerabilities');
+    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_findings');
   });
 });

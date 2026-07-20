@@ -5,7 +5,7 @@
  *
  * What this proves:
  *   1. Additive schema: project_dast_findings.kev, the three
- *      project_dependency_vulnerabilities.runtime_confirmed_* columns, the
+ *      project_dependency_findings.runtime_confirmed_* columns, the
  *      FK + covering index all exist.
  *   2. scan_jobs_dast_columns_match_type accepts type='dast_nuclei' carrying
  *      target_url (the widened CHECK).
@@ -148,7 +148,7 @@ async function seedPdv(
       ? `ARRAY[${opts.aliases.map((a) => `'${a}'`).join(',')}]::text[]`
       : `ARRAY[]::text[]`;
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, aliases, extraction_run_id,
        status, reachability_level, detected_at, created_at)
     VALUES
@@ -222,20 +222,20 @@ async function testSchema(): Promise<void> {
     SELECT table_name, column_name FROM information_schema.columns
     WHERE table_schema = 'public'
       AND ((table_name = 'project_dast_findings' AND column_name = 'kev')
-        OR (table_name = 'project_dependency_vulnerabilities'
+        OR (table_name = 'project_dependency_findings'
             AND column_name IN ('runtime_confirmed_at', 'runtime_confirmed_dast_finding_id', 'runtime_confirmed_prior_level')));
   `);
   assert(cols.rows.length === 4, `[A] kev + 3 runtime_confirmed_* columns exist (got ${cols.rows.length})`);
 
   const fk = await db.query<{ count: string }>(`
     SELECT COUNT(*)::text AS count FROM pg_constraint
-    WHERE conname = 'project_dependency_vulnerabilities_runtime_confirmed_dast_finding_id_fkey';
+    WHERE conname = 'project_dependency_findings_runtime_confirmed_dast_fkey';
   `);
   assert(fk.rows[0].count === '1', `[A] runtime_confirmed FK exists (got ${fk.rows[0].count})`);
 
   const idx = await db.query<{ count: string }>(`
     SELECT COUNT(*)::text AS count FROM pg_indexes
-    WHERE indexname = 'project_dependency_vulnerabilities_runtime_confirmed_fk';
+    WHERE indexname = 'project_dependency_findings_runtime_confirmed_fk';
   `);
   assert(idx.rows[0].count === '1', `[A] runtime_confirmed covering index exists (got ${idx.rows[0].count})`);
 
@@ -364,7 +364,7 @@ async function testRpcFlips(): Promise<void> {
   const xRows = await callRpc(db, PROJ_X, 'dast_x');
   assert(xRows.length === 1, `[B] cross-project: project X flips its own PDV`);
   const yLevel = await db.query<{ reachability_level: string }>(
-    `SELECT reachability_level FROM project_dependency_vulnerabilities WHERE project_id = '${PROJ_Y}'`,
+    `SELECT reachability_level FROM project_dependency_findings WHERE project_id = '${PROJ_Y}'`,
   );
   assert(yLevel.rows[0].reachability_level === 'module', `[B] cross-project: project Y PDV untouched (still module)`);
 
@@ -383,7 +383,7 @@ async function testRpcFlips(): Promise<void> {
   const multiRows = await callRpc(db, PROJ_MULTI, 'dast_multi');
   assert(multiRows.length === 1, `[B] multi-row flip returns exactly 1 PDV row (got ${multiRows.length})`);
   const winner = await db.query<{ runtime_confirmed_dast_finding_id: string }>(
-    `SELECT runtime_confirmed_dast_finding_id FROM project_dependency_vulnerabilities WHERE project_id = '${PROJ_MULTI}'`,
+    `SELECT runtime_confirmed_dast_finding_id FROM project_dependency_findings WHERE project_id = '${PROJ_MULTI}'`,
   );
   assert(
     winner.rows[0].runtime_confirmed_dast_finding_id === critFindingId,
@@ -409,7 +409,7 @@ async function testReReviewGating(): Promise<void> {
   await seedNucleiFinding(db, { projectId: PROJ_DEF, orgId: ORG, targetId: tDef, dastRunId: 'dast_def', linkedDepId: depDef, cveIds: ['CVE-2018-1000656'] });
   await callRpc(db, PROJ_DEF, 'dast_def');
   const defRow = await db.query<{ reachability_level: string; re_review_triggered_at: string | null; re_review_reasons: any }>(
-    `SELECT reachability_level, re_review_triggered_at, re_review_reasons FROM project_dependency_vulnerabilities WHERE project_id = '${PROJ_DEF}'`,
+    `SELECT reachability_level, re_review_triggered_at, re_review_reasons FROM project_dependency_findings WHERE project_id = '${PROJ_DEF}'`,
   );
   assert(defRow.rows[0].reachability_level === 'confirmed', `[C] asset_tier NULL: reachability_level = confirmed`);
   assert(defRow.rows[0].re_review_triggered_at !== null, `[C] asset_tier NULL: re_review_triggered_at written in same call`);
@@ -430,7 +430,7 @@ async function testReReviewGating(): Promise<void> {
   await seedNucleiFinding(db, { projectId: PROJ_OFF, orgId: ORG, targetId: tOff, dastRunId: 'dast_off', linkedDepId: depOff, cveIds: ['CVE-2019-19844'] });
   await callRpc(db, PROJ_OFF, 'dast_off');
   const offRow = await db.query<{ reachability_level: string; re_review_triggered_at: string | null }>(
-    `SELECT reachability_level, re_review_triggered_at FROM project_dependency_vulnerabilities WHERE project_id = '${PROJ_OFF}'`,
+    `SELECT reachability_level, re_review_triggered_at FROM project_dependency_findings WHERE project_id = '${PROJ_OFF}'`,
   );
   assert(offRow.rows[0].reachability_level === 'confirmed', `[C] enabled=false: reachability still flips to confirmed`);
   assert(offRow.rows[0].re_review_triggered_at === null, `[C] enabled=false: re_review_triggered_at NOT written`);
@@ -446,7 +446,7 @@ async function testReReviewGating(): Promise<void> {
   await seedNucleiFinding(db, { projectId: PROJ_NRU, orgId: ORG, targetId: tNru, dastRunId: 'dast_nru', linkedDepId: depNru, cveIds: ['CVE-2022-23646'] });
   await callRpc(db, PROJ_NRU, 'dast_nru');
   const nruRow = await db.query<{ reachability_level: string; re_review_triggered_at: string | null }>(
-    `SELECT reachability_level, re_review_triggered_at FROM project_dependency_vulnerabilities WHERE project_id = '${PROJ_NRU}'`,
+    `SELECT reachability_level, re_review_triggered_at FROM project_dependency_findings WHERE project_id = '${PROJ_NRU}'`,
   );
   assert(nruRow.rows[0].reachability_level === 'confirmed', `[C] reachability_upgrade=false: reachability still flips`);
   assert(nruRow.rows[0].re_review_triggered_at === null, `[C] reachability_upgrade=false: re_review_triggered_at NOT written`);
@@ -482,7 +482,7 @@ async function testCarryForwardSurvival(): Promise<void> {
   await callRpc(db, PROJ, 'dast_carry');
 
   const prevConfirmed = await db.query<{ reachability_level: string; runtime_confirmed_at: string | null }>(
-    `SELECT reachability_level, runtime_confirmed_at FROM project_dependency_vulnerabilities
+    `SELECT reachability_level, runtime_confirmed_at FROM project_dependency_findings
      WHERE project_id = '${PROJ}' AND extraction_run_id = '${PREV_RUN}'`,
   );
   assert(prevConfirmed.rows[0].reachability_level === 'confirmed', `[D] pre: prev-run PDV is confirmed`);
@@ -502,7 +502,7 @@ async function testCarryForwardSurvival(): Promise<void> {
     runtime_confirmed_prior_level: string | null;
   }>(
     `SELECT reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level
-     FROM project_dependency_vulnerabilities
+     FROM project_dependency_findings
      WHERE project_id = '${PROJ}' AND extraction_run_id = '${NEW_RUN}'`,
   );
   assert(carried.rows.length === 1, `[D] one new-run PDV exists`);

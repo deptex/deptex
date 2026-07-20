@@ -439,7 +439,7 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
  *  columns. `malicious` lacks carry-forward (PR-B) and `taint_flow` uses its own
  *  flow-suppression model, so both are intentionally excluded. */
 const STATUS_FINDING_TYPES = {
-  vulnerability: { table: 'project_dependency_vulnerabilities', run: 'extraction', legacy: true },
+  vulnerability: { table: 'project_dependency_findings', run: 'extraction', legacy: true },
   secret: { table: 'project_secret_findings', run: 'extraction', legacy: false },
   semgrep: { table: 'project_semgrep_findings', run: 'extraction', legacy: false },
   iac: { table: 'project_iac_findings', run: 'extraction', legacy: true },

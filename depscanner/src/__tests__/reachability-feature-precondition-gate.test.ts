@@ -318,7 +318,7 @@ const RUN_ID = 'run-1';
  * `callgraph_reached_transitive` module branch — the gate's input state).
  */
 function seedCallgraphReached(fsk: FakeStorage, opts: { name: string; osvId: string; summary: string }) {
-  fsk.set('project_dependency_vulnerabilities', [
+  fsk.set('project_dependency_findings', [
     {
       id: 'pdv-1',
       project_dependency_id: 'pd-1',
@@ -361,7 +361,7 @@ function seedCallgraphReached(fsk: FakeStorage, opts: { name: string; osvId: str
 
 function verdictOf(fsk: FakeStorage, pdvId: string): { level?: string; details?: any } {
   const u = fsk.updates.find(
-    (x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === pdvId && 'reachability_level' in x.values,
+    (x) => x.table === 'project_dependency_findings' && x.filter.id === pdvId && 'reachability_level' in x.values,
   );
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }

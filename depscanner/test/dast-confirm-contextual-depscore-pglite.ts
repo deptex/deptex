@@ -104,7 +104,7 @@ async function seedPdv(
 ): Promise<void> {
   const lit = (v: number | null) => (v == null ? 'NULL' : String(v));
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id,
        status, reachability_level, base_depscore_no_reachability, depscore,
        epd_factor, contextual_depscore, detected_at, created_at)
@@ -152,7 +152,7 @@ interface PdvScore {
 async function readPdv(db: PGlite, projectId: string): Promise<PdvScore> {
   const r = await db.query<PdvScore>(
     `SELECT reachability_level, contextual_depscore, depscore
-       FROM project_dependency_vulnerabilities WHERE project_id = '${projectId}'`,
+       FROM project_dependency_findings WHERE project_id = '${projectId}'`,
   );
   return r.rows[0];
 }

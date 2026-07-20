@@ -24,7 +24,7 @@ export function checkCisaKevTool(ctx: { organizationId: string }) {
       if (projectIds.length === 0) return { error: 'No projects in this organization' };
 
       let query = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, cisa_kev, aliases')
         .in('project_id', projectIds);
 

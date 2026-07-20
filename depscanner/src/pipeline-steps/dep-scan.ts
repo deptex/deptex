@@ -2,7 +2,7 @@
  * STEP: Vulnerability scan (OPTIONAL).
  *
  * Runs `depscan` (CycloneDX VDR profile) against the workspace, then post-
- * processes results into project_dependency_vulnerabilities rows. Uses the
+ * processes results into project_dependency_findings rows. Uses the
  * dep-scan VDR JSON as the source of truth for severity/affects/EPSS hints,
  * cross-referenced against the per-extraction PDV map to assign
  * project_dependency_id.
@@ -16,7 +16,7 @@
  * LLM-prompts path was atom-only.
  *
  * Side effects:
- *   - inserts rows into project_dependency_vulnerabilities (deduped by
+ *   - inserts rows into project_dependency_findings (deduped by
  *     (pd_id, osv_id))
  *   - uploads dep-scan.json to project-imports storage (non-fatal)
  *   - fetches CISA KEV + EPSS feeds (non-fatal)
@@ -951,7 +951,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         for (let i = 0; i < dedupedVulns.length; i += 100) {
           const chunk = dedupedVulns.slice(i, i + 100);
           const { error: insertErr } = await supabase
-            .from('project_dependency_vulnerabilities')
+            .from('project_dependency_findings')
             .insert(chunk);
           if (insertErr) {
             // One bad chunk must not drop every remaining vulnerability — log

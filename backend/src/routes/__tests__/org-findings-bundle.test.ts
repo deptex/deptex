@@ -55,7 +55,7 @@ describe('GET /:id/findings — org findings bundle', () => {
       error: null,
     });
     // Bulk SCA reads PDV → one CVE row tagged project A.
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [{ id: 'v1', project_id: 'A', project_dependency_id: 'pd-1', osv_id: 'CVE-2024-1', severity: 'high', depscore: 80, finding_key: 'fk-1', status: 'open' }],
       error: null,
     });
