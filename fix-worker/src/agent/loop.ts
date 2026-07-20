@@ -114,7 +114,12 @@ export async function runTaskAgent(
   const installationToken = await createInstallationToken(repoInfo.installationId);
   const resolved = await resolveOrgModel(supabase, input.organizationId, process.env.AEGIS_TASK_MODEL || undefined);
   const model = resolved.model;
-  const contextWindow = resolved.contextWindow;
+  // Effective context window: the model's real window, unless AEGIS_TASK_CONTEXT_WINDOW
+  // overrides it (a knob to cap agent context for cost/predictability — and to
+  // force the soft-stop in a test by setting it low). Feeds both the meter's
+  // denominator and the 90% soft-limit.
+  const windowOverride = parseInt(process.env.AEGIS_TASK_CONTEXT_WINDOW || '', 10);
+  const contextWindow = Number.isFinite(windowOverride) && windowOverride > 0 ? windowOverride : resolved.contextWindow;
 
   // Clone the repo up front — this is infrastructure setup, not a step the user
   // needs to watch, so it isn't narrated. The agent's first visible beat is its
