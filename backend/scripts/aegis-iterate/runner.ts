@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type { ModelMessage } from 'ai';
-import { createAegisAgent } from '../../src/lib/aegis-v3/agent';
-import { getOrCreateThread, loadThreadHistory } from '../../src/lib/aegis-v3/thread';
-import { saveUserMessage } from '../../src/lib/aegis-v3/persistence';
-import { getProviderInfoForOrg } from '../../src/lib/aegis-v3/provider';
+import { createAegisAgent } from '../../src/lib/aegis/agent';
+import { getOrCreateThread, loadThreadHistory } from '../../src/lib/aegis/thread';
+import { saveUserMessage } from '../../src/lib/aegis/persistence';
+import { getProviderInfoForOrg } from '../../src/lib/aegis/llm-provider';
 import { estimateCost } from '../../src/lib/ai/pricing';
 
 export interface ScenarioTurn {
