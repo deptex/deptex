@@ -1,4 +1,4 @@
-import { GitBranch, FilePen, PackageCheck, GitPullRequest, Telescope, CircleX, Check, Layers } from 'lucide-react';
+import { GitBranch, FilePen, PackageCheck, GitPullRequest, Telescope, CircleX, Check } from 'lucide-react';
 import { FileDiffCard } from './FileDiffCard';
 import { TerminalCard } from './TerminalCard';
 
@@ -18,7 +18,6 @@ const STEP_ICONS = {
   edit: FilePen,
   verify: PackageCheck,
   pr: GitPullRequest,
-  compact: Layers,
   failed: CircleX,
 } as const;
 
@@ -61,17 +60,6 @@ export function TaskStepLine({
         <FilePen className="h-4 w-4 shrink-0 text-foreground-secondary" />
         <span className="truncate font-mono text-xs text-foreground/90">{label}</span>
         <span className="ml-auto shrink-0 text-[11px] text-foreground-secondary">contents hidden (secret)</span>
-      </div>
-    );
-  }
-
-  // Context compaction → a quiet tool-use line WITH its glyph, so it reads as a
-  // real action the agent took (like "Read requirements.txt"), not a status note.
-  if (icon === 'compact') {
-    return (
-      <div className="flex items-center gap-2 text-sm text-foreground-secondary">
-        <Icon className="h-3.5 w-3.5 shrink-0" />
-        <span>{label}</span>
       </div>
     );
   }
