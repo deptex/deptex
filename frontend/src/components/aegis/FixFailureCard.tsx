@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, FileDiff, TerminalSquare } from 'lucide-react';
+import { CircleAlert, ChevronDown, FileDiff, TerminalSquare } from 'lucide-react';
 import { api, type FixRecord } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -112,34 +112,39 @@ export function FixFailureCard({ data }: { data?: FixFailureCardData }) {
   const errorOutput = d?.errorOutput ?? null;
 
   return (
-    <div className="my-2 overflow-hidden rounded-lg border border-destructive/30 bg-destructive/[0.04]">
-      <div className="flex items-center gap-2 border-b border-destructive/20 px-4 py-3">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-destructive/80" />
-        <span className="text-sm font-semibold text-foreground">{headline}</span>
+    <div className="my-2 overflow-hidden rounded-lg border border-border bg-background-card">
+      {/* Neutral, shadcn-style card — a restrained amber glyph signals "didn't
+          finish" without the aggressive red-error box. */}
+      <div className="flex items-start gap-2.5 px-4 py-3">
+        <CircleAlert className="mt-px h-4 w-4 shrink-0 text-amber-500/70" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="text-sm font-medium text-foreground">{headline}</div>
+          {explanation && (
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground-secondary">{explanation}</p>
+          )}
+        </div>
       </div>
 
-      <div className="space-y-3 px-4 py-3">
-        {explanation && (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground-secondary">{explanation}</p>
-        )}
+      {(attemptedDiff || errorOutput) && (
+        <div className="space-y-2 px-4 pb-3">
+          {attemptedDiff && (
+            <Section icon={FileDiff} title="What I tried" defaultOpen>
+              <DiffView diff={attemptedDiff} />
+            </Section>
+          )}
 
-        {attemptedDiff && (
-          <Section icon={FileDiff} title="What I tried" defaultOpen>
-            <DiffView diff={attemptedDiff} />
-          </Section>
-        )}
-
-        {errorOutput && (
-          <Section icon={TerminalSquare} title="The error">
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground/80">
-              {errorOutput}
-            </pre>
-          </Section>
-        )}
-      </div>
+          {errorOutput && (
+            <Section icon={TerminalSquare} title="The error">
+              <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground/80">
+                {errorOutput}
+              </pre>
+            </Section>
+          )}
+        </div>
+      )}
 
       {nextStep && (
-        <div className="border-t border-destructive/20 px-4 py-3 text-xs leading-relaxed text-foreground-secondary">
+        <div className="border-t border-border px-4 py-2.5 text-xs leading-relaxed text-foreground-secondary">
           {nextStep}
         </div>
       )}

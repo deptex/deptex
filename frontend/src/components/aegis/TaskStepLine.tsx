@@ -1,4 +1,4 @@
-import { GitBranch, FilePen, PackageCheck, GitPullRequest, Telescope, CircleX, Check } from 'lucide-react';
+import { FilePen, CircleAlert } from 'lucide-react';
 import { FileDiffCard } from './FileDiffCard';
 import { TerminalCard } from './TerminalCard';
 
@@ -9,17 +9,8 @@ import { TerminalCard } from './TerminalCard';
 //     change as a real unified diff).
 //   • Any other action (explore, a verify that soft-passed to CI) → a plain
 //     labeled line: it isn't a command and has nothing to show.
-// The `failed` step is a prominent red line. Emitted by the fix-worker as a
-// `step` part; `command` / `diff` / `output` are set only where they apply.
-
-const STEP_ICONS = {
-  clone: GitBranch,
-  explore: Telescope,
-  edit: FilePen,
-  verify: PackageCheck,
-  pr: GitPullRequest,
-  failed: CircleX,
-} as const;
+// The `failed` step is a quiet, muted line (amber glyph). Emitted by the
+// fix-worker as a `step` part; `command` / `diff` / `output` set where they apply.
 
 export function TaskStepLine({
   icon,
@@ -34,13 +25,12 @@ export function TaskStepLine({
   diff?: string;
   output?: string;
 }) {
-  const Icon = STEP_ICONS[icon as keyof typeof STEP_ICONS] ?? Check;
-
-  // A failure is always shown plainly, in red.
+  // A stop/failure is a quiet, muted line with a restrained amber glyph — never
+  // the aggressive red-error look.
   if (icon === 'failed') {
     return (
-      <div className="flex items-center gap-2 text-sm text-destructive/90">
-        <Icon className="h-3.5 w-3.5 shrink-0" />
+      <div className="flex items-center gap-2 text-sm text-foreground-secondary">
+        <CircleAlert className="h-3.5 w-3.5 shrink-0 text-amber-500/70" />
         <span>{label}</span>
       </div>
     );
