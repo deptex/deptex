@@ -768,13 +768,8 @@ export async function sendTaskFollowup(args: {
   userId: string;
   organizationId: string;
   message: string;
-  /** The "Compact context" action (context-limit card). Persists a truthful
-   *  "Context compacted" tool-use beat + a HIDDEN continue-turn (the model needs
-   *  a trailing user turn to act on; the UI skips hidden turns), instead of a
-   *  visible free-text user bubble. Otherwise behaves like a normal follow-up. */
-  compact?: boolean;
 }): Promise<{ woke: boolean; queued: boolean; threadId: string }> {
-  const { taskId, userId, organizationId, message, compact } = args;
+  const { taskId, userId, organizationId, message } = args;
 
   // 1. Load + authorize the task; it must have a bound thread to message into.
   const { data: row } = await supabase
@@ -790,30 +785,7 @@ export async function sendTaskFollowup(args: {
   // 2. Persist the user turn FIRST (same shape as the chat path), so the
   //    message is visible in the thread — and drainable by the worker — even if
   //    everything after this point fails.
-  if (compact) {
-    // The visible artifact: a "Context compacted" step beat (renders like any
-    // tool-use line). Then a hidden user turn carrying the actual instruction —
-    // replayed for the model, skipped by the chat UI (metadata.hidden).
-    await supabase.from('aegis_chat_messages').insert([
-      {
-        thread_id: threadId,
-        role: 'assistant',
-        user_id: null,
-        content: 'Context compacted',
-        metadata: { parts: [{ type: 'step', icon: 'compact', label: 'Context compacted', status: 'done' }] },
-      },
-      {
-        thread_id: threadId,
-        role: 'user',
-        user_id: userId,
-        content:
-          'Continue from where you left off — you now have a fresh, compacted view of the work so far. Pick the task back up and finish it.',
-        metadata: { hidden: true, parts: [{ type: 'text', text: 'Continue from where you left off.' }] },
-      },
-    ]);
-  } else {
-    await saveUserMessage({ threadId, userId, content: message });
-  }
+  await saveUserMessage({ threadId, userId, content: message });
 
   let woke = false;
   let queued = false;

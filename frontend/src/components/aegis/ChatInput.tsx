@@ -5,7 +5,6 @@ import { cn } from '../../lib/utils';
 import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
 import { useToast } from '../../hooks/use-toast';
 import { ModelPicker } from './ModelPicker';
-import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip';
 
 interface ChatInputProps {
   onSubmit: (message: string) => void;
@@ -29,61 +28,11 @@ interface ChatInputProps {
   // input is a bare `/token`, a menu of matching commands appears; picking one
   // submits `/name`, which the parent's onSubmit interprets as a command.
   slashCommands?: SlashCommand[];
-  // Optional context-window meter (task threads pass live agent telemetry): a
-  // small ring in the composer toolbar filling toward the model's window, so the
-  // run's context usage is visible at a glance without leaving the chat.
-  contextUsage?: ContextUsage | null;
 }
 
 export interface SlashCommand {
   name: string; // without the leading slash
   description: string;
-}
-
-export interface ContextUsage {
-  tokens: number | null; // input tokens used (null before the first reading)
-  window: number; // the model's context window
-  pct: number; // tokens / window, 0..1
-}
-
-// A circular context-window meter — like Claude Code's, but in the composer.
-// Fills clockwise toward the window cap; neutral → amber (75%) → red (90%, where
-// the agent soft-stops). Hover shows the exact tokens / window.
-function ContextRing({ usage }: { usage: ContextUsage }) {
-  const pct = Math.max(0, Math.min(1, usage.pct));
-  const percent = Math.round(pct * 100);
-  const R = 7;
-  const CIRC = 2 * Math.PI * R;
-  const tone = pct >= 0.9 ? 'text-destructive' : pct >= 0.75 ? 'text-warning' : 'text-foreground/70';
-  const label =
-    usage.tokens != null
-      ? `${usage.tokens.toLocaleString()} / ${usage.window.toLocaleString()} tokens · ${percent}% of context`
-      : `${percent}% of the ${usage.window.toLocaleString()}-token context window`;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex items-center justify-center rounded-md p-1 cursor-default" aria-label={label}>
-          <svg width="18" height="18" viewBox="0 0 18 18" className={tone}>
-            <circle cx="9" cy="9" r={R} fill="none" stroke="currentColor" strokeOpacity={0.18} strokeWidth={2.5} />
-            <circle
-              cx="9"
-              cy="9"
-              r={R}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2.5}
-              strokeLinecap="round"
-              strokeDasharray={CIRC}
-              strokeDashoffset={CIRC * (1 - pct)}
-              transform="rotate(-90 9 9)"
-              style={{ transition: 'stroke-dashoffset 500ms ease' }}
-            />
-          </svg>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 function ArrowUpIcon({ className }: { className?: string }) {
@@ -107,7 +56,6 @@ export function ChatInput({
   isStreaming,
   onStop,
   slashCommands,
-  contextUsage,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [slashIdx, setSlashIdx] = useState(0);
@@ -260,7 +208,6 @@ export function ChatInput({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {contextUsage && <ContextRing usage={contextUsage} />}
           {listening ? (
           <button
             type="button"

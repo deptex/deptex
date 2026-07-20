@@ -207,19 +207,6 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('renders the context-window ring in the composer when the run has telemetry', async () => {
-    mocks.getTaskRunStatus.mockResolvedValue({
-      taskStatus: 'working',
-      run: { fixStatus: 'executing', step: 8, contextTokens: 142000, contextWindow: 200000, contextPct: 0.71, startedAt: null, prNumber: null },
-    } as any);
-    await renderChatPane({ liveReload: true, task: { ...task, status: 'working' } });
-    // The ring is number-less; its exact usage lives in the accessible label
-    // (and the hover tooltip).
-    await waitFor(() =>
-      expect(screen.getByLabelText(/142,000 \/ 200,000 tokens · 71% of context/)).toBeInTheDocument(),
-    );
-  });
-
   it('/retry wakes the agent with a retry message — never sends the raw "/retry"', async () => {
     // task.status is 'completed' (terminal), so a retry is allowed.
     await renderChatPane({ liveReload: true, task });

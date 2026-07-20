@@ -25,8 +25,12 @@ import {
  *  Configurable via AEGIS_TASK_WALL_CLOCK_SEC; default 30 min (a slower/cheaper
  *  model needs more room than a frontier one). */
 const WALL_CLOCK_MS = (parseInt(process.env.AEGIS_TASK_WALL_CLOCK_SEC || '1800', 10) || 1800) * 1000;
-/** Hard step cap (mirrors the plan's ~40). */
+/** Hard step cap PER compaction pass (mirrors the plan's ~40). */
 const MAX_STEPS = 40;
+/** Max auto-compaction cycles in a single run. A run that fills the window this
+ *  many times is pathological (each compaction restarts from a bounded view);
+ *  the wall clock is the real cost bound. Env-overridable for testing. */
+const MAX_COMPACTIONS = parseInt(process.env.AEGIS_TASK_MAX_COMPACTIONS || '', 10) || 25;
 /** Steps with no side-effecting tool call before we call it stuck. */
 const STALL_LIMIT = 6;
 
@@ -64,8 +68,9 @@ export interface AgentRunDeps {
   workDir: string;
 }
 
-/** Fraction of the model's context window at which we stop gracefully (reply to
- *  resume) rather than let the provider hard-400 on an over-long prompt. */
+/** Fraction of the model's context window at which a generateText pass ends
+ *  cleanly so the loop can auto-compact and continue — before the provider
+ *  hard-400s on an over-long prompt. */
 const CONTEXT_SOFT_LIMIT = 0.9;
 
 /** Strip any leaked chain-of-thought before narrating a model beat. */
@@ -264,7 +269,7 @@ export async function runTaskAgent(
   const tools = buildAgentTools(toolDeps);
 
   const controller = new AbortController();
-  let abortReason: 'cancelled' | 'wall_clock' | 'stall' | 'context' | null = null;
+  let abortReason: 'cancelled' | 'wall_clock' | 'stall' | null = null;
   const wallTimer = setTimeout(() => {
     abortReason = abortReason ?? 'wall_clock';
     controller.abort();
@@ -338,15 +343,11 @@ export async function runTaskAgent(
       { inputTokens: peakInputTokens, window: contextWindow, step: stepCount },
       machineId,
     );
-    // Soft context-window stop: bail BEFORE the provider hard-400s on an
-    // over-long prompt. Unlike a raw overflow crash this is recoverable — the
-    // wake/replay path rebuilds a BOUNDED history, so "reply to continue"
-    // genuinely resolves it. Only trips once we actually have a usage reading.
-    if (!state.terminal && contextWindow > 0 && peakInputTokens > contextWindow * CONTEXT_SOFT_LIMIT) {
-      abortReason = abortReason ?? 'context';
-      controller.abort();
-      return;
-    }
+    // NOTE: the context-window limit is NOT handled here anymore. Instead of
+    // aborting the run when the window fills, the outer loop auto-compacts and
+    // continues (see the compaction loop below) — so a task never terminates on
+    // context; it summarizes and keeps going. The `contextHigh` stopWhen cleanly
+    // ends a generateText pass at the soft limit so the loop can compact.
 
     // Novelty-aware stall detection. Reading six NEW files (package.json →
     // grep → lockfile chunks for a transitive dep) is legitimate investigation,
@@ -376,37 +377,92 @@ export async function runTaskAgent(
     }
   };
 
+  // A generateText pass ends cleanly (no abort) once a step's prompt crosses the
+  // soft limit, so the outer loop can compact and continue instead of the run
+  // dying on a full window.
+  const contextHigh = ({ steps }: { steps: any[] }): boolean => {
+    const inTok = steps[steps.length - 1]?.usage?.inputTokens ?? 0;
+    return contextWindow > 0 && inTok > contextWindow * CONTEXT_SOFT_LIMIT;
+  };
+
+  // Build the starting conversation. A fresh run seeds the brief as the first
+  // user turn; a resume replays the (already bounded) thread history.
+  let system = AGENT_SYSTEM;
+  let messages: any[];
+  if (input.resume && input.threadId) {
+    // A replay failure throws → system_error, rather than silently resuming with
+    // no memory.
+    const replay = await reconstructAgentMessages(supabase, input.threadId, { brief: prompt });
+    replayedThrough = replay.replayedThrough;
+    messages = replay.messages;
+    system = buildResumeSystem(
+      resumeMode ? { prNumber: resumeMode.prNumber } : null,
+      input.resumePriorStatus === 'completed',
+      input.baseBranch,
+    );
+  } else {
+    messages = [{ role: 'user', content: prompt }];
+  }
+
+  // Auto-compaction loop: the run keeps going across context-window refills. A
+  // pass fills the window → post a "Context compacted" beat, rebuild a bounded
+  // view of the conversation (recent work kept, old history dropped — the same
+  // compaction the resume path uses), and run again. The task only ever ends on
+  // finish_task / cancel / time budget — never on context.
+  let compactions = 0;
+  // Steps taken by the FINAL generateText pass (the step cap is per-pass, whereas
+  // the global stepCount spans all passes), and whether the run ended because the
+  // window filled but no compactions were left.
+  let lastPassSteps = 0;
+  let compactionsExhausted = false;
   try {
-    if (input.resume && input.threadId) {
-      // Resume: replay the thread as conversation history. The brief seeds the
-      // first user turn (it was never persisted to the thread). A replay
-      // failure throws into this try — the run resolves as system_error rather
-      // than silently resuming with no memory.
-      const replay = await reconstructAgentMessages(supabase, input.threadId, { brief: prompt });
-      replayedThrough = replay.replayedThrough;
-      await generateText({
-        model,
-        system: buildResumeSystem(
+    while (true) {
+      let filledContext = false;
+      try {
+        const result = await generateText({
+          model,
+          system,
+          messages,
+          tools,
+          stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task'), contextHigh],
+          abortSignal: controller.signal,
+          onStepFinish,
+        });
+        lastPassSteps = result.steps?.length ?? 0;
+        messages = [...messages, ...((result.response?.messages as any[]) ?? [])];
+        const lastIn = result.steps?.[result.steps.length - 1]?.usage?.inputTokens ?? 0;
+        filledContext = !state.terminal && contextWindow > 0 && lastIn > contextWindow * CONTEXT_SOFT_LIMIT;
+      } catch (e: any) {
+        // cancel / wall-clock / stall aborts rethrow to the outer handler. A
+        // provider hard-400 that slipped past the soft stop is ALSO "context
+        // filled" — compact and continue rather than die.
+        if (controller.signal.aborted) throw e;
+        if (isContextLengthError(e) && input.threadId && compactions < MAX_COMPACTIONS) {
+          filledContext = true;
+        } else {
+          throw e;
+        }
+      }
+
+      if (state.terminal) break; // finish_task opened a PR / answered
+      if (filledContext && input.threadId && compactions < MAX_COMPACTIONS) {
+        compactions++;
+        await narrateStep(supabase, input.threadId, { icon: 'compact', label: 'Context compacted' });
+        // The bounded rebuild from the thread's persisted beats IS the compacted
+        // "summary" the model continues from.
+        const compacted = await reconstructAgentMessages(supabase, input.threadId, { brief: prompt });
+        messages = compacted.messages;
+        system = buildResumeSystem(
           resumeMode ? { prNumber: resumeMode.prNumber } : null,
           input.resumePriorStatus === 'completed',
           input.baseBranch,
-        ),
-        messages: replay.messages,
-        tools,
-        stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task')],
-        abortSignal: controller.signal,
-        onStepFinish,
-      });
-    } else {
-      await generateText({
-        model,
-        system: AGENT_SYSTEM,
-        prompt,
-        tools,
-        stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task')],
-        abortSignal: controller.signal,
-        onStepFinish,
-      });
+        );
+        peakInputTokens = 0; // reset the meter for the next pass
+        lastPassSteps = 0; // the next pass starts fresh; don't misread as a step cap
+        continue;
+      }
+      if (filledContext) compactionsExhausted = true; // filled but out of compactions
+      break; // natural stop / step cap / compactions exhausted
     }
   } catch (e: any) {
     // An abort is expected (cancel / wall-clock / stall); anything else is a real error.
@@ -429,27 +485,25 @@ export async function runTaskAgent(
   // — so without this it would be misread as not_fixable (first run) or, worse,
   // as a successful answer-only turn (resume). It's really "ran out of room in
   // one pass": a resumable budget exhaustion.
-  const hitStepCap = !state.terminal && !abortReason && !loopError && stepCount >= MAX_STEPS;
+  const hitStepCap = !state.terminal && !abortReason && !loopError && lastPassSteps >= MAX_STEPS;
 
-  // A clean natural stop (no abort, no error, NOT a step-cap cutoff) on a resume
-  // whose fix already stands, where the model answered in prose, IS an
-  // answer-only turn — resolve it as answered BEFORE the failure fallback so a
-  // good answer isn't stamped "I couldn't complete that follow-up" (the PR #16
-  // wake bug). A dirty tree, an abort/error, or a step-cap cutoff falls through
-  // to the honest failure path below.
-  if (!state.terminal && !abortReason && !loopError && !hitStepCap) {
+  // A clean natural stop (no abort, no error, NOT a step-cap / compaction-exhausted
+  // cutoff) on a resume whose fix already stands, where the model answered in
+  // prose, IS an answer-only turn — resolve it as answered BEFORE the failure
+  // fallback so a good answer isn't stamped "I couldn't complete that follow-up"
+  // (the PR #16 wake bug). A dirty tree, an abort/error, or a budget cutoff falls
+  // through to the honest failure path below.
+  if (!state.terminal && !abortReason && !loopError && !hitStepCap && !compactionsExhausted) {
     await maybeFinalizeAnsweredNaturalStop(toolDeps, narrated);
   }
 
-  // A deterministic context overflow (soft-limit abort OR a provider "prompt too
-  // long" 400) is NOT a transient infra hiccup — retrying reproduces it. Classify
-  // it as its own category so the card invites reply-to-resume (which genuinely
-  // fixes it: replay rebuilds a bounded history) instead of "try again later".
-  const contextOverflow = abortReason === 'context' || (!abortReason && isContextLengthError(loopError));
-
-  // A real (non-abort, non-context) loop error is invisible outside the DB
-  // error_message column otherwise — surface it to Sentry for triage.
-  if (loopError && !contextOverflow) {
+  // Context overflow is no longer a terminal state — the loop auto-compacts. The
+  // only ways a context limit reaches here are pathological: exhausting
+  // MAX_COMPACTIONS on a clean soft-stop (compactionsExhausted) or a hard-400
+  // after the last allowed compaction (a context-length loopError). Both resolve
+  // as a resumable "needs another run"; never page Sentry for them.
+  const contextEscaped = (!!loopError && isContextLengthError(loopError)) || compactionsExhausted;
+  if (loopError && !contextEscaped) {
     captureInfraError(loopError, 'aegis-task-loop', { fixId: input.fixId, taskId: input.taskId });
   }
 
@@ -459,26 +513,24 @@ export async function runTaskAgent(
   if (!state.terminal) {
     // An unexpected exception (model/provider/infra error) → system_error, so the
     // user sees a generic "something went wrong", not the raw provider message.
-    // 'stall' / 'budget_exhausted' (= wall-clock) / 'context_exhausted' each
-    // carry their own safe copy in finalizeFailure — kept distinct because
-    // "budget" wording reads as prepaid BILLING to a paying user.
-    const category: 'cancelled' | 'stall' | 'budget_exhausted' | 'context_exhausted' | 'system_error' | 'not_fixable' =
+    // 'stall' / 'budget_exhausted' (= wall-clock / step-cap / compaction-exhausted)
+    // each carry their own safe copy in finalizeFailure — "budget" wording is kept
+    // out of the user copy (it reads as prepaid BILLING to a paying user).
+    const category: 'cancelled' | 'stall' | 'budget_exhausted' | 'system_error' | 'not_fixable' =
       abortReason === 'cancelled'
         ? 'cancelled'
         : abortReason === 'stall'
           ? 'stall'
-          : contextOverflow
-            ? 'context_exhausted'
-            : abortReason || hitStepCap
-              ? 'budget_exhausted'
-              : loopError
-                ? 'system_error'
-                : 'not_fixable';
+          : abortReason || hitStepCap || contextEscaped
+            ? 'budget_exhausted'
+            : loopError
+              ? 'system_error'
+              : 'not_fixable';
     const message =
       abortReason === 'cancelled'
         ? 'Task stopped by user.'
-        : contextOverflow
-          ? 'Reached the context-window limit before finishing.'
+        : contextEscaped
+          ? 'Reached the context-window limit after repeated compaction.'
           : hitStepCap
             ? `Reached the ${MAX_STEPS}-step limit before finishing.`
             : abortReason === 'wall_clock'

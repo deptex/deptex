@@ -22,10 +22,8 @@ function arg(name: string): string | undefined {
 async function main() {
   const taskId = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : undefined;
   const message = arg('message');
-  // --compact drives the "Compact context" card action (no message needed).
-  const compact = process.argv.includes('--compact');
-  if (!taskId || (!message && !compact)) {
-    throw new Error('Usage: tsx scripts/send-task-followup.ts <taskId> (--message "..." | --compact) [--user <id>]');
+  if (!taskId || !message) {
+    throw new Error('Usage: tsx scripts/send-task-followup.ts <taskId> --message "..." [--user <id>]');
   }
 
   const { data: trow } = await supabase
@@ -48,7 +46,7 @@ async function main() {
   }
   if (!userId) throw new Error('Could not resolve a sending user — pass --user <userId>');
 
-  const result = await sendTaskFollowup({ taskId, userId, organizationId, message: message ?? '', compact });
+  const result = await sendTaskFollowup({ taskId, userId, organizationId, message });
   console.log(result);
   if (result.woke) {
     console.log('\n▶ Woke the task agent — a fix-worker machine is booting to resume it.');

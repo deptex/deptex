@@ -3,7 +3,7 @@ import { DefaultChatTransport, type UIMessage } from 'ai';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
 import { aegisApi, type AegisMessage, type AegisTask, type AegisThread, type MessagePart, type TaskRunStatus } from '../../lib/aegis-api';
-import type { SlashCommand, ContextUsage } from './ChatInput';
+import type { SlashCommand } from './ChatInput';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
@@ -625,8 +625,6 @@ export function ChatPane({
   // non-persisted line above the composer (the thread reloads from the DB, so a
   // fake chat message wouldn't survive).
   const [commandOutput, setCommandOutput] = useState<string | null>(null);
-  // Live context-window usage for the composer's ring meter (task threads).
-  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   // Bumped each time a task follow-up is sent — arms the realtime-independent
   // poll fallback below so the reply always lands even if the realtime socket
   // has silently stalled (the "nothing came until I refreshed" bug).
@@ -635,39 +633,6 @@ export function ChatPane({
     if (!taskWorking) setTaskQueuedHint(false); // run ended → pickup imminent
   }, [taskWorking]);
 
-  // Context-window telemetry for the composer ring. Poll fast while the agent
-  // is running (the fill moves per step), and once when idle to show the last
-  // run's usage. Task threads only — a regular chat has no per-run window meter.
-  useEffect(() => {
-    const taskId = task?.id;
-    if (!liveReload || !taskId) {
-      setContextUsage(null);
-      return;
-    }
-    let cancelled = false;
-    const load = () => {
-      aegisApi.getTaskRunStatus(taskId, organizationId).then(
-        (s) => {
-          if (cancelled) return;
-          const r = s.run;
-          setContextUsage(
-            r && r.contextWindow && r.contextPct != null
-              ? { tokens: r.contextTokens, window: r.contextWindow, pct: r.contextPct }
-              : null,
-          );
-        },
-        () => {
-          /* transient — keep the last value */
-        },
-      );
-    };
-    load();
-    const interval = taskWorking ? window.setInterval(load, 3000) : undefined;
-    return () => {
-      cancelled = true;
-      if (interval !== undefined) window.clearInterval(interval);
-    };
-  }, [liveReload, task?.id, organizationId, taskWorking, followupPollNonce]);
   useEffect(() => {
     if (!liveReload || !propThreadId) {
       setTaskWorking(false);
@@ -833,21 +798,6 @@ export function ChatPane({
     },
     [task, organizationId, setMessages, setTaskWorking, setFollowupPollNonce],
   );
-
-  // "Compact context" (the context-limit card's action) — wakes the task agent to
-  // resume on a compacted history. The worker posts the "Context compacted" beat
-  // and continues; here we just flip to working + arm the poll so the UI reacts
-  // instantly (realtime reconciles the persisted beat).
-  const handleCompactContext = useCallback(() => {
-    if (!task) return;
-    setSendError(null);
-    setCommandOutput(null);
-    setTaskWorking(true);
-    setFollowupPollNonce((n) => n + 1);
-    void aegisApi
-      .compactTaskContext(task.id, organizationId)
-      .catch(() => setSendError('Something went wrong. Please try again.'));
-  }, [task, organizationId, setTaskWorking, setFollowupPollNonce]);
 
   const handleSubmit = useCallback(
     (text: string) => {
@@ -1149,7 +1099,6 @@ export function ChatPane({
               isRegenerating={i === latestErrorIdx && isRegenerating}
               onTopUp={(reason) => setTopUp({ open: true, reason })}
               canManageBilling={canManageBilling}
-              onCompactContext={handleCompactContext}
             />
           ))}
           {showThinkingDot && (
@@ -1205,7 +1154,6 @@ export function ChatPane({
               isStreaming={isStreaming || taskRunActive}
               onStop={taskRunActive ? handleTaskStop : handleStop}
               slashCommands={liveReload && task ? TASK_SLASH_COMMANDS : undefined}
-              contextUsage={contextUsage}
             />
           </div>
         </div>

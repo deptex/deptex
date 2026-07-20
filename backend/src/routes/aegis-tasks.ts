@@ -205,31 +205,6 @@ router.post('/:taskId/message', async (req: AuthRequest, res) => {
   }
 });
 
-/** "Compact context" — the context-limit card's action. Wakes the task agent to
- *  resume on a compacted history, posting a "Context compacted" beat rather than
- *  a free-text follow-up. */
-router.post('/:taskId/compact', async (req: AuthRequest, res) => {
-  const userId = req.user!.id;
-  const { organizationId } = req.body ?? {};
-  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
-  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
-    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
-  }
-  try {
-    const result = await sendTaskFollowup({
-      taskId: req.params.taskId,
-      userId,
-      organizationId,
-      message: '',
-      compact: true,
-    });
-    return res.json(result);
-  } catch (err: any) {
-    const message2 = err?.message ?? 'Failed to compact context';
-    return res.status(statusForError(message2)).json({ error: message2 });
-  }
-});
-
 /** Stop a running task — rejects its in-flight agent fixes so the worker aborts. */
 router.post('/:taskId/cancel', async (req: AuthRequest, res) => {
   const userId = req.user!.id;

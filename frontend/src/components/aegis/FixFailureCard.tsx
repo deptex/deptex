@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, FileDiff, TerminalSquare, Loader2 } from 'lucide-react';
+import { AlertTriangle, ChevronDown, FileDiff, TerminalSquare } from 'lucide-react';
 import { api, type FixRecord } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -11,56 +11,6 @@ import { supabase } from '../../lib/supabase';
 
 interface FixFailureCardData {
   fixId?: string;
-  // Category hint carried on the tool-result so the right card renders on the
-  // FIRST paint (no red-then-gray flash while the fix row is still fetching).
-  category?: string;
-}
-
-// The context-limit variant: a deliberately minimal gray card — just the headline
-// and a "Compact context" action that wakes the agent to resume on a compacted
-// view. Rendered instead of the full failure layout when the fix stopped on
-// context_exhausted (a recoverable limit, not an error). No icons by design.
-function ContextLimitCard({
-  status,
-  onCompact,
-}: {
-  status: FixRecord['status'] | undefined;
-  onCompact?: () => void;
-}) {
-  const [compacting, setCompacting] = useState(false);
-  const done = status === 'completed';
-  // Anything mid-flight (compacting locally, or the row already resuming) shows
-  // the spinner; the button covers 'failed' AND the brief unknown-while-loading
-  // window so it never flickers to the spinner before the row resolves.
-  const inProgress = compacting || (!!status && status !== 'failed' && status !== 'completed');
-  return (
-    <div className="my-2 overflow-hidden rounded-lg border border-border bg-background-card">
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className="text-sm font-medium text-foreground">Context window limit reached</span>
-        <div className="ml-auto shrink-0">
-          {done ? (
-            <span className="text-xs text-foreground-secondary">Context compacted</span>
-          ) : inProgress ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-foreground-secondary">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Compacting
-            </span>
-          ) : onCompact ? (
-            <button
-              type="button"
-              onClick={() => {
-                setCompacting(true);
-                onCompact();
-              }}
-              className="inline-flex items-center rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:bg-foreground/90 transition-colors"
-            >
-              Compact context
-            </button>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // A raw udiff, line-coloured so the attempt is skimmable.
@@ -114,13 +64,7 @@ function Section({
   );
 }
 
-export function FixFailureCard({
-  data,
-  onCompactContext,
-}: {
-  data?: FixFailureCardData;
-  onCompactContext?: () => void;
-}) {
+export function FixFailureCard({ data }: { data?: FixFailureCardData }) {
   const fixId = data?.fixId;
   const [fix, setFix] = useState<FixRecord | null>(null);
 
@@ -161,25 +105,6 @@ export function FixFailureCard({
   if (!data) return null;
 
   const d = fix?.failureDetails ?? null;
-
-  // Context-limit is a recoverable stop, not a failure — render the minimal gray
-  // "Context window limit reached" card. The category hint (from the tool-result)
-  // lets us pick it on the FIRST paint, before the fix row fetch resolves.
-  const isContext =
-    data.category === 'context_exhausted' ||
-    fix?.errorCategory === 'context_exhausted' ||
-    d?.category === 'context_exhausted';
-  if (isContext) {
-    return <ContextLimitCard status={fix?.status} onCompact={onCompactContext} />;
-  }
-
-  // Still fetching and the category isn't known yet — a neutral placeholder,
-  // never the red failure card (which would flash for a beat before a
-  // context-limit card resolves to gray). Once the row lands we branch for real.
-  if (!fix) {
-    return <div className="my-2 h-[52px] rounded-lg border border-border bg-background-card opacity-50 animate-pulse" />;
-  }
-
   const headline = d?.headline ?? "I couldn't complete this fix";
   const explanation = d?.explanation ?? fix?.errorMessage ?? null;
   const nextStep = d?.nextStep ?? null;

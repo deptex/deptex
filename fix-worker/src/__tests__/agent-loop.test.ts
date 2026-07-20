@@ -54,6 +54,8 @@ import { isJobCancelled } from '../job-db';
 import { cloneAtSha, cloneBranchHead } from '../sandbox';
 import { getPullRequestState } from '../pr';
 import { captureInfraError } from '../observability/capture';
+import { narrateStep } from '../task-chat';
+import { reconstructAgentMessages } from '../agent/replay';
 import { buildAgentTools, finalizeFailure, maybeFinalizeAnsweredNaturalStop } from '../agent/tools';
 import { runTaskAgent, isContextLengthError, type AgentRunInput } from '../agent/loop';
 
@@ -227,22 +229,33 @@ describe('isContextLengthError — provider overflow classification', () => {
 });
 
 describe('runTaskAgent — a provider overflow 400 resolves as context_exhausted', () => {
-  test('a hard context-length 400 (not an abort) → context_exhausted, NOT system_error, and is not sent to Sentry', async () => {
+  test('a hard context-length 400 is ABSORBED by auto-compaction (Context compacted beat), not a terminal failure', async () => {
+    let calls = 0;
     (generateText as jest.Mock).mockImplementation(async () => {
-      // The provider rejected the over-long prompt before any step ran — the
-      // soft-stop never got a usage reading to trip on. This is the belt to the
-      // soft-stop's suspenders.
-      throw Object.assign(new Error('Bad Request'), {
-        statusCode: 400,
-        responseBody:
-          '{"error":{"message":"This model\'s maximum context length is 128000 tokens. However, your messages resulted in 150000 tokens.","code":"context_length_exceeded"}}',
-      });
+      calls++;
+      if (calls === 1) {
+        // The provider rejected the over-long prompt. The loop must treat this
+        // as "window filled" — compact and continue — not die.
+        throw Object.assign(new Error('Bad Request'), {
+          statusCode: 400,
+          responseBody:
+            '{"error":{"message":"This model\'s maximum context length is 128000 tokens. However, your messages resulted in 150000 tokens.","code":"context_length_exceeded"}}',
+        });
+      }
+      return {}; // second pass: nothing left to do
     });
     await runTaskAgent({} as any, makeInput(), makeDeps());
-    expect(finalizeFailure).toHaveBeenCalledTimes(1);
-    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('context_exhausted');
-    // A deterministic overflow is NOT a transient infra hiccup — it must not
-    // page Sentry (only genuine loop errors do).
+    // The overflow was absorbed: a "Context compacted" beat was posted and the
+    // conversation was rebuilt from a bounded view.
+    expect(narrateStep).toHaveBeenCalledWith(expect.anything(), 'thread-1', {
+      icon: 'compact',
+      label: 'Context compacted',
+    });
+    expect(reconstructAgentMessages).toHaveBeenCalled();
+    // context_exhausted is no longer a terminal category, and an overflow must
+    // never page Sentry.
+    const cats = (finalizeFailure as jest.Mock).mock.calls.map((c) => c[1]);
+    expect(cats).not.toContain('context_exhausted');
     expect(captureInfraError).not.toHaveBeenCalled();
   });
 });
@@ -313,15 +326,21 @@ describe('runTaskAgent — novelty-aware stall detection', () => {
 describe('runTaskAgent — resume mode', () => {
   const PRIOR = { branch: 'aegis/fix-x-abc', number: 7, url: 'https://github.com/o/r/pull/7', repoFullName: 'o/r' };
 
-  test('a first run pins to the base SHA, uses the prompt path, and returns a null watermark', async () => {
+  test('a first run pins to the base SHA, seeds the brief as a user message, and returns a null watermark', async () => {
     (generateText as jest.Mock).mockImplementation(async () => ({}));
     const res = await runTaskAgent({} as any, makeInput(), makeDeps());
     expect(res).toEqual({ replayedThrough: null, cancelled: false });
     expect(cloneAtSha).toHaveBeenCalledTimes(1);
     expect(cloneBranchHead).not.toHaveBeenCalled();
     const call = (generateText as jest.Mock).mock.calls[0][0];
-    expect(call.prompt).toBeDefined();
-    expect(call.messages).toBeUndefined();
+    // The loop always drives generateText via `messages` now (so a compaction
+    // can rebuild the conversation); a fresh run seeds the brief as user turn 1.
+    expect(call.prompt).toBeUndefined();
+    expect(Array.isArray(call.messages)).toBe(true);
+    expect(call.messages[0].role).toBe('user');
+    // Fresh run uses the base agent system (not the resume system).
+    expect(typeof call.system).toBe('string');
+    expect(String(call.system)).not.toContain('No open pull request');
   });
 
   test('a resume with an OPEN prior PR clones the PR branch, replays the thread, and returns the watermark', async () => {
