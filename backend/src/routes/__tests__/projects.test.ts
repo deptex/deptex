@@ -391,8 +391,6 @@ describe('Project Routes', () => {
         data: { id: 'ban-1', dependency_id: dependencyId, banned_version: '1.0.0', bump_to_version: '2.0.0', banned_by: mockUser.id, created_at: new Date().toISOString() },
         error: null,
       });
-      setTableResponse('organization_watchlist', 'then', { data: [], error: null });
-
       const res = await request(app)
         .post(`/api/organizations/${orgId}/ban-version`)
         .set('Authorization', `Bearer ${mockToken}`)

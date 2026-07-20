@@ -1187,8 +1187,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         navigate(`/organizations/${organizationId}/projects/${projectId}`, { replace: true });
       } else if (userPermissions.view_dependencies) {
         navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies`, { replace: true });
-      } else if (userPermissions.view_watchlist) {
-        navigate(`/organizations/${organizationId}/projects/${projectId}/watchlist`, { replace: true });
       } else if (userPermissions.view_members) {
         navigate(`/organizations/${organizationId}/projects/${projectId}/members`, { replace: true });
       }

@@ -10,7 +10,7 @@ import {
   runDependencyRefresh,
   runWebhookHealthCheck,
   cleanupOldWebhookDeliveries,
-} from '../lib/watchtower-poll';
+} from '../lib/dependency-poll';
 import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
@@ -36,7 +36,7 @@ async function verifyInternalAuth(req: express.Request): Promise<boolean> {
   }
 }
 
-router.post('/watchtower-daily-poll', async (req, res) => {
+router.post('/dependency-daily-poll', async (req, res) => {
   if (!(await verifyInternalAuth(req))) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -49,7 +49,7 @@ router.post('/watchtower-daily-poll', async (req, res) => {
     const cleanupResult = await cleanupOldWebhookDeliveries();
 
     const elapsed = Date.now() - startTime;
-    console.log(`[watchtower-daily-poll] Complete in ${elapsed}ms`);
+    console.log(`[dependency-daily-poll] Complete in ${elapsed}ms`);
 
     res.json({
       deps_refreshed: refreshResult.processed,
@@ -59,7 +59,7 @@ router.post('/watchtower-daily-poll', async (req, res) => {
       elapsed_ms: elapsed,
     });
   } catch (error: any) {
-    console.error('[watchtower-daily-poll] Error:', error);
+    console.error('[dependency-daily-poll] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });

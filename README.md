@@ -42,7 +42,6 @@ flowchart TB
 
     subgraph EE [Cloud Layer]
         Aegis[Aegis AI Agent]
-        Watchtower[Watchtower]
     end
 
     Frontend --> Backend
@@ -53,7 +52,6 @@ flowchart TB
     Ingestion --> Postgres
     Vuln --> Postgres
     Backend --> Aegis
-    Backend --> Watchtower
 ```
 
 ### Core components
@@ -66,7 +64,6 @@ flowchart TB
 | **Ingestion Engine** | Processes SBOMs, normalizes packages across ecosystems, builds the dependency graph, and stores everything in PostgreSQL. |
 | **Vulnerability Processing** | Matches dependencies to CVEs (via GHSA and NVD), analyzes reachability, and computes impact. Powers the vulnerability dashboard. |
 | **Aegis AI** | Autonomous security agent — investigates findings, plans fixes you approve, opens draft PRs. (Cloud) |
-| **Watchtower** | Daily upstream monitoring — new releases and advisories. (Cloud) |
 
 ### Key features
 
@@ -74,7 +71,6 @@ flowchart TB
 - **License auditing** — Policy enforcement
 - **Dependency graph** — Transitive analysis, reachability
 - **SBOM** — Automatic generation, drift detection
-- **Watchtower** — Upstream release & advisory monitoring (Cloud)
 - **Aegis AI** — Investigation, fix planning, draft-PR remediation (Cloud)
 
 ---

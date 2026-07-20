@@ -172,7 +172,6 @@ function buildDependencyFromOverview(
     github_url: overview?.github_url ?? null,
     is_direct: true,
     source: listItem?.source ?? 'dependencies',
-    is_watching: listItem?.is_watching ?? false,
     files_importing_count: overview?.files_importing_count ?? null,
     imported_functions: overview?.imported_functions ?? [],
     imported_file_paths: overview?.imported_file_paths ?? [],
@@ -376,8 +375,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       // Redirect to first available tab
       if (userPermissions.view_overview) {
         navigate(`/organizations/${organizationId}/projects/${projectId}`, { replace: true });
-      } else if (userPermissions.view_watchlist) {
-        navigate(`/organizations/${organizationId}/projects/${projectId}/watchlist`, { replace: true });
       } else if (userPermissions.view_members) {
         navigate(`/organizations/${organizationId}/projects/${projectId}/members`, { replace: true });
       } else if (userPermissions.view_settings) {

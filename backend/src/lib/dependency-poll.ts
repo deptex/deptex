@@ -1,6 +1,6 @@
 /**
  * Daily maintenance jobs called by the QStash cron at
- * POST /api/workers/watchtower-daily-poll: npm latest-version refresh,
+ * POST /api/workers/dependency-daily-poll: npm latest-version refresh,
  * GHSA batch vuln sync, weekly download counts, webhook health checks,
  * and old webhook-delivery cleanup.
  */
@@ -86,7 +86,7 @@ async function refreshDownloadCounts(byName: Map<string, { ids: string[]; direct
     .filter(([, g]) => g.directIds.length > 0)
     .map(([name]) => name);
 
-  console.log(`[watchtower-poll] Refreshing download counts for ${directNames.length} direct dependencies (${DOWNLOAD_DELAY_MS}ms delay)...`);
+  console.log(`[dependency-poll] Refreshing download counts for ${directNames.length} direct dependencies (${DOWNLOAD_DELAY_MS}ms delay)...`);
 
   let updated = 0;
   let errors = 0;
@@ -110,12 +110,12 @@ async function refreshDownloadCounts(byName: Map<string, { ids: string[]; direct
     }
   }
 
-  console.log(`[watchtower-poll] Download refresh complete. Updated: ${updated}, Errors: ${errors}`);
+  console.log(`[dependency-poll] Download refresh complete. Updated: ${updated}, Errors: ${errors}`);
   return { updated, errors };
 }
 
 export async function runDependencyRefresh(): Promise<{ processed: number; errors: number; vulnsUpdated: number }> {
-  console.log('[watchtower-poll] Dependency refresh starting...');
+  console.log('[dependency-poll] Dependency refresh starting...');
 
   const [directIds, allRows] = await Promise.all([
     getDirectDependencyIds(),
@@ -138,7 +138,7 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
     if (directIds.has(row.id)) g.directIds.push(row.id);
   }
 
-  console.log(`[watchtower-poll] ${allRows.length} deps (${byName.size} unique), ${directIds.size} direct`);
+  console.log(`[dependency-poll] ${allRows.length} deps (${byName.size} unique), ${directIds.size} direct`);
 
   let processed = 0;
   let errors = 0;
@@ -161,12 +161,12 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
                 updated_at: new Date().toISOString(),
               })
               .eq('name', name);
-            console.log(`[watchtower-poll] ${name}: ${group.latest_version ?? 'none'} → ${npm.latestVersion}`);
+            console.log(`[dependency-poll] ${name}: ${group.latest_version ?? 'none'} → ${npm.latestVersion}`);
           }
         }
         return { count: group.ids.length };
       } catch (err: any) {
-        console.error(`[watchtower-poll] Error refreshing ${name}:`, err?.message);
+        console.error(`[dependency-poll] Error refreshing ${name}:`, err?.message);
         return { count: 0, error: true };
       }
     }));
@@ -202,13 +202,13 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
       }
     }
   } catch (err: any) {
-    console.error('[watchtower-poll] GHSA sync error:', err?.message);
+    console.error('[dependency-poll] GHSA sync error:', err?.message);
   }
 
   // Refresh weekly download counts (sequential, slow — runs after version + vuln refresh)
   const downloads = await refreshDownloadCounts(byName);
 
-  console.log(`[watchtower-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, Downloads updated: ${downloads.updated}`);
+  console.log(`[dependency-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, Downloads updated: ${downloads.updated}`);
   return { processed, errors, vulnsUpdated };
 }
 
@@ -224,7 +224,7 @@ export async function runWebhookHealthCheck(): Promise<{ markedInactive: number 
 
   const count = data?.length ?? 0;
   if (count > 0) {
-    console.log(`[watchtower-poll] Marked ${count} repos as webhook-inactive (no events in 7 days)`);
+    console.log(`[dependency-poll] Marked ${count} repos as webhook-inactive (no events in 7 days)`);
   }
   return { markedInactive: count };
 }
@@ -240,7 +240,7 @@ export async function cleanupOldWebhookDeliveries(): Promise<{ deleted: number }
 
   const count = data?.length ?? 0;
   if (count > 0) {
-    console.log(`[watchtower-poll] Cleaned up ${count} webhook deliveries older than 30 days`);
+    console.log(`[dependency-poll] Cleaned up ${count} webhook deliveries older than 30 days`);
   }
   return { deleted: count };
 }

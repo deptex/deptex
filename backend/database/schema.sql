@@ -709,25 +709,6 @@ CREATE TABLE IF NOT EXISTS public.organization_statuses (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS public.organization_watchlist (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  organization_id uuid NOT NULL,
-  name text NOT NULL,
-  watchtower_cleared_at timestamp with time zone,
-  created_at timestamp with time zone DEFAULT now(),
-  quarantine_next_release boolean NOT NULL DEFAULT false,
-  is_current_version_quarantined boolean NOT NULL DEFAULT false,
-  quarantine_until timestamp with time zone,
-  latest_allowed_version text,
-  dependency_id uuid NOT NULL
-);
-CREATE TABLE IF NOT EXISTS public.organization_watchlist_cleared_commits (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  organization_id uuid NOT NULL,
-  commit_sha text NOT NULL,
-  cleared_at timestamp with time zone DEFAULT now(),
-  dependency_id uuid NOT NULL
-);
 CREATE TABLE IF NOT EXISTS public.organizations (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   name text NOT NULL,
@@ -755,15 +736,6 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   subscription_tier text,
   structured_compliance_enabled boolean NOT NULL DEFAULT false
 );
-CREATE TABLE IF NOT EXISTS public.package_anomalies (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  watched_package_id uuid NOT NULL,
-  commit_sha text NOT NULL,
-  contributor_id uuid,
-  anomaly_score double precision NOT NULL DEFAULT 0,
-  score_breakdown jsonb DEFAULT '[]'::jsonb,
-  detected_at timestamp with time zone DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS public.package_capabilities (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   package_name text NOT NULL,
@@ -787,50 +759,6 @@ CREATE TABLE IF NOT EXISTS public.package_capabilities (
   clipboard_access boolean NOT NULL DEFAULT false,
   scanned_at timestamp with time zone NOT NULL DEFAULT now(),
   scan_error text
-);
-CREATE TABLE IF NOT EXISTS public.package_commit_touched_functions (
-  watched_package_id uuid NOT NULL,
-  commit_sha text NOT NULL,
-  function_name text NOT NULL,
-  created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.package_commits (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  watched_package_id uuid NOT NULL,
-  sha text NOT NULL,
-  author text NOT NULL,
-  author_email text NOT NULL,
-  message text NOT NULL,
-  "timestamp" timestamp with time zone NOT NULL,
-  lines_added integer DEFAULT 0,
-  lines_deleted integer DEFAULT 0,
-  files_changed integer DEFAULT 0,
-  diff_data jsonb,
-  created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.package_contributors (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  watched_package_id uuid NOT NULL,
-  author_email text NOT NULL,
-  author_name text,
-  total_commits integer NOT NULL DEFAULT 0,
-  avg_lines_added double precision DEFAULT 0,
-  avg_lines_deleted double precision DEFAULT 0,
-  stddev_lines_added double precision DEFAULT 0,
-  stddev_lines_deleted double precision DEFAULT 0,
-  avg_files_changed double precision DEFAULT 0,
-  stddev_files_changed double precision DEFAULT 0,
-  avg_commit_message_length double precision DEFAULT 0,
-  stddev_commit_message_length double precision DEFAULT 0,
-  insert_to_delete_ratio double precision DEFAULT 0,
-  commit_time_histogram jsonb DEFAULT '{}'::jsonb,
-  typical_days_active jsonb DEFAULT '{}'::jsonb,
-  commit_time_heatmap jsonb DEFAULT '[]'::jsonb,
-  files_worked_on jsonb DEFAULT '{}'::jsonb,
-  first_commit_date timestamp with time zone,
-  last_commit_date timestamp with time zone,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.package_import_summaries (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1724,12 +1652,6 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_finding_events (
   extraction_run_id text,
   project_dependency_id uuid
 );
-CREATE TABLE IF NOT EXISTS public.project_watchlist (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_id uuid NOT NULL,
-  organization_watchlist_id uuid NOT NULL,
-  created_at timestamp with time zone DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS public.projects (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   organization_id uuid,
@@ -1749,8 +1671,6 @@ CREATE TABLE IF NOT EXISTS public.projects (
   effective_pr_check_code text,
   last_vuln_check_at timestamp with time zone,
   vuln_check_frequency text DEFAULT '24h'::text,
-  watchtower_enabled boolean NOT NULL DEFAULT false,
-  watchtower_enabled_at timestamp with time zone,
   notifications_paused_until timestamp with time zone,
   canvas_position_x numeric(12,2),
   canvas_position_y numeric(12,2),
@@ -2050,36 +1970,6 @@ CREATE TABLE IF NOT EXISTS public.user_sessions (
   device_info jsonb,
   last_active_at timestamp with time zone DEFAULT now(),
   created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.watched_packages (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  status text NOT NULL DEFAULT 'pending'::text,
-  error_message text,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  last_known_commit_sha text,
-  last_polled_at timestamp with time zone,
-  dependency_id uuid
-);
-CREATE TABLE IF NOT EXISTS public.watchtower_jobs (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  status text NOT NULL DEFAULT 'queued'::text,
-  job_type text NOT NULL,
-  priority integer NOT NULL DEFAULT 10,
-  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
-  organization_id uuid,
-  project_id uuid,
-  dependency_id uuid,
-  package_name text NOT NULL,
-  attempt integer NOT NULL DEFAULT 0,
-  max_attempts integer NOT NULL DEFAULT 3,
-  machine_id text,
-  heartbeat_at timestamp with time zone,
-  started_at timestamp with time zone,
-  completed_at timestamp with time zone,
-  error_message text,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -2754,27 +2644,6 @@ AS $function$
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.claim_watchtower_job(p_machine_id text)
- RETURNS SETOF watchtower_jobs
- LANGUAGE sql
-AS $function$
-  UPDATE watchtower_jobs
-  SET status = 'processing',
-      machine_id = p_machine_id,
-      started_at = NOW(),
-      heartbeat_at = NOW(),
-      attempt = attempt + 1,
-      updated_at = NOW()
-  WHERE id = (
-    SELECT id FROM watchtower_jobs
-    WHERE status = 'queued'
-    ORDER BY priority ASC, created_at ASC
-    FOR UPDATE SKIP LOCKED
-    LIMIT 1
-  )
-  RETURNING *;
-$function$
-;
 
 CREATE OR REPLACE FUNCTION public.cleanup_container_image_scan_cache(retention_days integer DEFAULT 30)
  RETURNS integer
@@ -2808,22 +2677,6 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.cleanup_orphaned_watchlist()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
-BEGIN
-  DELETE FROM organization_watchlist
-  WHERE id = OLD.organization_watchlist_id
-  AND NOT EXISTS (
-    SELECT 1 FROM project_watchlist
-    WHERE organization_watchlist_id = OLD.organization_watchlist_id
-    AND id != OLD.id
-  );
-  RETURN OLD;
-END;
-$function$
-;
 
 CREATE OR REPLACE FUNCTION public.commit_dast_target_run(p_target_id uuid, p_dast_run_id text)
  RETURNS void
@@ -4678,21 +4531,6 @@ SELECT jsonb_build_object(
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.get_watchtower_commits_by_anomaly(p_watched_package_id uuid, p_since_created_at timestamp with time zone, p_cleared_shas text[], p_limit integer, p_offset integer)
- RETURNS SETOF package_commits
- LANGUAGE sql
- STABLE
-AS $function$
-  SELECT c.*
-  FROM package_commits c
-  LEFT JOIN package_anomalies a ON a.commit_sha = c.sha AND a.watched_package_id = c.watched_package_id
-  WHERE c.watched_package_id = p_watched_package_id
-  AND (p_since_created_at IS NULL OR c.created_at >= p_since_created_at)
-  AND (p_cleared_shas IS NULL OR cardinality(p_cleared_shas) = 0 OR c.sha != ALL(p_cleared_shas))
-  ORDER BY a.anomaly_score DESC NULLS LAST, c.timestamp DESC
-  LIMIT p_limit OFFSET p_offset;
-$function$
-;
 
 CREATE OR REPLACE FUNCTION public.halfvec_accum(double precision[], halfvec)
  RETURNS double precision[]
@@ -5897,37 +5735,6 @@ AS $function$
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.recover_stuck_watchtower_jobs()
- RETURNS integer
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-  recovered INTEGER;
-BEGIN
-  UPDATE watchtower_jobs
-  SET status = 'queued',
-      machine_id = NULL,
-      started_at = NULL,
-      heartbeat_at = NULL,
-      updated_at = NOW()
-  WHERE status = 'processing'
-    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
-    AND attempt < max_attempts;
-  GET DIAGNOSTICS recovered = ROW_COUNT;
-
-  UPDATE watchtower_jobs
-  SET status = 'failed',
-      error_message = 'Exhausted max attempts',
-      completed_at = NOW(),
-      updated_at = NOW()
-  WHERE status = 'processing'
-    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
-    AND attempt >= max_attempts;
-
-  RETURN recovered;
-END;
-$function$
-;
 
 CREATE OR REPLACE FUNCTION public.refund_sync_usage(p_org_id uuid)
  RETURNS integer
@@ -7139,13 +6946,8 @@ ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_ss
 ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_pkey PRIMARY KEY (id);
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_capabilities ADD CONSTRAINT package_capabilities_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_import_summaries ADD CONSTRAINT package_import_summaries_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT package_maintainer_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
@@ -7191,7 +6993,6 @@ ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_pkey PRIMARY KEY (id);
 ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_pkey PRIMARY KEY (id);
@@ -7212,8 +7013,6 @@ ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notificatio
 ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (id);
-ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY KEY (id);
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
@@ -7243,12 +7042,7 @@ ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_pr
 ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_dependency_id_key UNIQUE (organization_id, dependency_id);
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha);
 ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_natural_key UNIQUE (package_name, version, ecosystem);
-ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
 ALTER TABLE public.package_import_summaries ADD CONSTRAINT pis_natural_key UNIQUE (ecosystem, package_name, version);
 ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key UNIQUE NULLS NOT DISTINCT (package_name, version, ecosystem, observed_at);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
@@ -7278,7 +7072,6 @@ ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT psemf_extraction_run_
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_team_id_key UNIQUE (project_id, team_id);
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT pus_extraction_run_unique UNIQUE (project_id, file_path, line_number, target_name, extraction_run_id);
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_package_name_ecosyste_key UNIQUE (project_id, package_name, ecosystem, candidate_type);
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_organization_watchlist_id_key UNIQUE (project_id, organization_watchlist_id);
 ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
 ALTER TABLE public.silence_events ADD CONSTRAINT silence_events_run_pdv_uniq UNIQUE (extraction_run_id, pdv_id);
@@ -7291,7 +7084,6 @@ ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_user_id_pr
 ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_user_id_organization_id_key UNIQUE (user_id, organization_id);
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
-ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = 'platform'::text)) NOT VALID;
 ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_attribution_resource_type_check CHECK ((attribution_resource_type = ANY (ARRAY['aegis_chat'::text, 'scan_job'::text, 'fix_task'::text, 'rule_generation'::text, 'epd_scoring'::text])));
@@ -7414,8 +7206,6 @@ ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_ro
 ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_threshold_chk CHECK (((ai_fp_filter_confidence_threshold >= (0)::numeric) AND (ai_fp_filter_confidence_threshold <= (1)::numeric)));
 ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
 ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_digest_preference_check CHECK ((digest_preference = ANY (ARRAY['instant'::text, 'daily_digest'::text, 'weekly_digest'::text, 'off'::text])));
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check CHECK ((job_type = ANY (ARRAY['full_analysis'::text, 'new_version'::text, 'batch_version_analysis'::text, 'poll_sweep'::text])));
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -7514,15 +7304,6 @@ ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_pr
 ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_contributor_id_fkey FOREIGN KEY (contributor_id) REFERENCES package_contributors(id) ON DELETE CASCADE;
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functions_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_triggered_by_id_fkey FOREIGN KEY (triggered_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -7625,8 +7406,6 @@ ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_proj
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.projects ADD CONSTRAINT projects_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.projects ADD CONSTRAINT projects_status_id_fkey FOREIGN KEY (status_id) REFERENCES organization_statuses(id) ON DELETE SET NULL;
@@ -7669,10 +7448,6 @@ ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_user_id_
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_default_organization_id_fkey FOREIGN KEY (default_organization_id) REFERENCES organizations(id) ON DELETE SET NULL;
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.watched_packages ADD CONSTRAINT fk_watched_packages_dependency FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
 
 -- ============================================
 -- INDEXES
@@ -7798,25 +7573,7 @@ CREATE INDEX idx_organization_roles_display_order ON public.organization_roles U
 CREATE INDEX idx_organization_roles_org_id ON public.organization_roles USING btree (organization_id);
 CREATE INDEX idx_organization_statuses_org ON public.organization_statuses USING btree (organization_id);
 CREATE INDEX idx_organization_statuses_rank ON public.organization_statuses USING btree (organization_id, rank);
-CREATE INDEX idx_organization_watchlist_cleared_commits_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id) WHERE (dependency_id IS NOT NULL);
-CREATE INDEX idx_organization_watchlist_cleared_commits_org_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id);
-CREATE INDEX idx_organization_watchlist_dependency_id ON public.organization_watchlist USING btree (dependency_id);
-CREATE INDEX idx_organization_watchlist_name ON public.organization_watchlist USING btree (name);
-CREATE INDEX idx_organization_watchlist_org_name ON public.organization_watchlist USING btree (organization_id, name);
-CREATE INDEX idx_organization_watchlist_organization_id_dependency_id ON public.organization_watchlist USING btree (organization_id, dependency_id);
 CREATE INDEX idx_organizations_github_installation_id ON public.organizations USING btree (github_installation_id) WHERE (github_installation_id IS NOT NULL);
-CREATE INDEX idx_package_anomalies_anomaly_score ON public.package_anomalies USING btree (anomaly_score DESC);
-CREATE INDEX idx_package_anomalies_contributor_id ON public.package_anomalies USING btree (contributor_id);
-CREATE INDEX idx_package_anomalies_detected_at ON public.package_anomalies USING btree (detected_at DESC);
-CREATE INDEX idx_package_anomalies_watched_package_id ON public.package_anomalies USING btree (watched_package_id);
-CREATE INDEX idx_package_commit_touched_functions_lookup ON public.package_commit_touched_functions USING btree (watched_package_id, commit_sha);
-CREATE INDEX idx_package_commits_author_email ON public.package_commits USING btree (author_email);
-CREATE INDEX idx_package_commits_timestamp ON public.package_commits USING btree ("timestamp" DESC);
-CREATE INDEX idx_package_commits_watched_package_created_at ON public.package_commits USING btree (watched_package_id, created_at DESC);
-CREATE INDEX idx_package_commits_watched_package_id ON public.package_commits USING btree (watched_package_id);
-CREATE INDEX idx_package_contributors_author_email ON public.package_contributors USING btree (author_email);
-CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
-CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
 CREATE INDEX idx_package_security_cache_lookup ON public.package_security_cache USING btree (package_name, version, ecosystem, scanner);
 CREATE INDEX idx_pbir_current_digest ON public.project_base_image_recommendations USING btree (current_image_digest) WHERE (current_image_digest IS NOT NULL);
 CREATE INDEX idx_pbir_project_active ON public.project_base_image_recommendations USING btree (project_id) WHERE (is_dismissed = false);
@@ -7933,8 +7690,6 @@ CREATE INDEX idx_project_security_fixes_thread_id ON public.project_security_fix
 CREATE INDEX idx_project_teams_is_owner ON public.project_teams USING btree (project_id, is_owner);
 CREATE INDEX idx_project_teams_project_id ON public.project_teams USING btree (project_id);
 CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team_id);
-CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
-CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
 CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
 CREATE INDEX idx_projects_is_compliant ON public.projects USING btree (is_compliant);
@@ -8021,11 +7776,6 @@ CREATE INDEX idx_user_profiles_default_organization_id ON public.user_profiles U
 CREATE INDEX idx_user_profiles_user_id ON public.user_profiles USING btree (user_id);
 CREATE INDEX idx_user_sessions_active ON public.user_sessions USING btree (last_active_at DESC);
 CREATE INDEX idx_user_sessions_user ON public.user_sessions USING btree (user_id);
-CREATE INDEX idx_watched_packages_last_polled_at ON public.watched_packages USING btree (last_polled_at) WHERE (status = 'ready'::text);
-CREATE INDEX idx_watched_packages_status ON public.watched_packages USING btree (status);
-CREATE INDEX idx_watchtower_jobs_heartbeat ON public.watchtower_jobs USING btree (heartbeat_at) WHERE (status = 'processing'::text);
-CREATE INDEX idx_watchtower_jobs_priority ON public.watchtower_jobs USING btree (priority, created_at) WHERE (status = 'queued'::text);
-CREATE INDEX idx_watchtower_jobs_status ON public.watchtower_jobs USING btree (status) WHERE (status = ANY (ARRAY['queued'::text, 'processing'::text]));
 CREATE INDEX idx_webhook_deliveries_created ON public.webhook_deliveries USING btree (created_at);
 CREATE INDEX idx_webhook_deliveries_delivery_id ON public.webhook_deliveries USING btree (delivery_id);
 CREATE INDEX idx_webhook_deliveries_repo ON public.webhook_deliveries USING btree (repo_full_name);
@@ -8045,7 +7795,6 @@ CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING
 CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_dependency_finding_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE UNIQUE INDEX idx_scan_jobs_one_active_per_project_type ON public.scan_jobs USING btree (project_id, type) WHERE (status = ANY (ARRAY['queued'::text, 'processing'::text]));
 CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
-CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
 CREATE UNIQUE INDEX project_dast_findings_target_resolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE (handler_file_path IS NOT NULL);
 CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE (handler_file_path IS NULL);
 CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
@@ -8073,7 +7822,6 @@ CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_i
 CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_native_bindings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
-CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
 CREATE TRIGGER trg_container_finding_status BEFORE INSERT OR UPDATE ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION trg_container_finding_status();
 CREATE TRIGGER trg_dast_finding_status BEFORE INSERT OR UPDATE ON public.project_dast_findings FOR EACH ROW EXECUTE FUNCTION trg_dast_finding_status();
 CREATE TRIGGER trg_iac_finding_status BEFORE INSERT OR UPDATE ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION trg_iac_finding_status();

@@ -162,7 +162,7 @@ router.post('/daily', async (req, res) => {
   const jobs = [
     '/api/internal/learning/recompute-patterns',
     '/api/workers/notification-cleanup',
-    '/api/workers/watchtower-daily-poll',
+    '/api/workers/dependency-daily-poll',
     '/api/internal/malicious/retention-prune',
     '/api/internal/malicious/maintainer-signal-sync',
     '/api/integrations/internal/refresh-jira-webhooks',

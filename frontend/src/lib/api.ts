@@ -3975,7 +3975,6 @@ export interface ProjectDependency {
   /** For transitive deps: "parentName@parentVersion" of the package that brings this one in. */
   parent_package?: string | null;
   environment?: 'prod' | 'dev' | null;
-  is_watching: boolean;
   files_importing_count?: number | null;
   imported_functions?: string[];
   imported_file_paths?: string[];
@@ -4643,7 +4642,6 @@ export interface ProjectPermissions {
   manage_members: boolean;
   view_settings: boolean;
   edit_settings: boolean;
-  view_watchlist?: boolean;
 }
 
 export interface ProjectWithRole extends Project {

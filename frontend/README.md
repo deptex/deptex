@@ -7,7 +7,7 @@ A developer- and security-first platform for managing open source dependencies a
 Deptex is a dependency governance platform that helps organizations:
 - Track dependencies (direct + transitive) with GitHub integration
 - Enforce policy-as-code (licenses, vulnerabilities, source policies)
-- Collaborate via Watchlists and approval workflows
+- Collaborate across teams and projects with role-based permissions
 - Get smart alerts with AI-powered remediation
 - Generate SBOM exports and compliance reports
 

@@ -26,7 +26,6 @@ function minimalDependency(overrides: Partial<ProjectDependency> = {}): ProjectD
     github_url: null,
     is_direct: true,
     source: 'dependencies',
-    is_watching: false,
     files_importing_count: 1,
     imported_functions: [],
     ai_usage_summary: null,

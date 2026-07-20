@@ -47,8 +47,7 @@ async function setupSchema(storage: any, orgId: string, projId: string): Promise
   if (orgRes.error) throw new Error(`org insert: ${orgRes.error.message}`);
   // Per schema dump: projects requires id + name; organization_id is nullable
   // but the IaC trigger derives organization_id off projects.organization_id,
-  // so we MUST set it. Other NOT NULL cols (auto_bump, asset_tier,
-  // watchtower_enabled, infra_types) have defaults.
+  // so we MUST set it. Other NOT NULL cols (auto_bump, infra_types) have defaults.
   const projRes = await storage.from('projects').insert({
     id: projId,
     organization_id: orgId,

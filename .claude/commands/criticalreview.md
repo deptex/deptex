@@ -27,7 +27,7 @@ Before spawning anything:
 5. Build a **scope summary** — not for the user yet, for the planner:
    - Files changed (count, paths, grouped by domain)
    - Lines added / removed
-   - Touched domains: routes, middleware, database migrations, lib (ai/aegis/learning/policy-engine/etc.), workers (extraction/parser/watchtower/aider), frontend pages, frontend components, tests, config
+   - Touched domains: routes, middleware, database migrations, lib (ai/aegis/learning/policy-engine/etc.), workers (depscanner/fix-worker), frontend pages, frontend components, tests, config
    - Any schema changes (CREATE TABLE, ALTER TABLE, DROP, new RLS policies)
    - Any new/modified permission strings (grep the diff for org/team permission constants)
    - Any new network calls, new external integrations, new AI tool registrations
@@ -148,7 +148,7 @@ Grouped by concern axis. Each persona has an ID (used in planner JSON) and a len
 - **realtime-subscription-auditor** — For any new Supabase Realtime subscription on the frontend: verify the subscription filter (`eq('organization_id', orgId)`) scopes to the current tenant. Unscoped subscriptions leak across orgs.
 - **n-plus-one-hunter** — For any new backend handler that loops (`for (const x of ...)` + `.from(...).select()` inside): flag. Prefer `.in()` / joins / RPC. Include the expected row count at scale (check related table sizes).
 - **index-usage-auditor** — For any new WHERE/ORDER BY column in the diff, verify an index exists in `backend/database/` for that pattern. Flag missing indexes on likely-hot paths.
-- **worker-claim-atomicity** — Specifically for worker code (extraction-worker, parser-worker, watchtower-worker): verify `FOR UPDATE SKIP LOCKED` or equivalent, heartbeat cadence, max-attempt bail-out.
+- **worker-claim-atomicity** — Specifically for worker code (depscanner, fix-worker): verify `FOR UPDATE SKIP LOCKED` or equivalent, heartbeat cadence, max-attempt bail-out.
 - **concurrent-edit-auditor** — For any mutating route where two users in the same org could edit the same resource (policies, status codes, PR checks, project settings, team settings, Aegis automations): check for optimistic-locking via a `version` / `updated_at` column in the update's WHERE clause. Without it, last-write-wins silently clobbers a concurrent edit. Flag as P1 when the resource is a policy/code field (losing an admin's policy edit is a real incident), P2 on cosmetic fields.
 - **cache-invalidation-auditor** — Redis is hot-path for rate-limits, cost caps, AI responses, dependency metadata, and session state. For every mutation in the diff: identify every cache key shape that could be stale after the mutation, and verify there's a matching invalidation (DEL, SETEX overwrite, or a TTL short enough that staleness doesn't matter). Flag any new cache write without a matching invalidation path. Particular hot spots: `ai:cost:*` (cost-cap staleness → budget overrun), package/dependency cache (post-registry-update staleness → wrong depscore), org/team membership cache (stale permissions → ghost access after revoke).
 

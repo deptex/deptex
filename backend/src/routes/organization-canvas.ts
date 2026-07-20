@@ -27,7 +27,7 @@ type PermResult = { ok: boolean; status: number; message: string };
  * Canvas write gate. Grants access when the user has owner/admin role on the
  * org, an org-level role carrying `manage_teams_and_projects`, or — for a
  * specific project — team-level `manage_projects` on the project's owning
- * team. Mirrors `checkWatchtowerManagePermission` in projects.ts so that a
+ * team. Mirrors `checkProjectManagePermission` in lib/project-access.ts so that a
  * team lead can reposition their own team's projects on the org canvas.
  */
 async function requireManagePermission(

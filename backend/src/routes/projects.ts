@@ -1653,7 +1653,6 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       userPermissions = {
         view_overview: true,
         view_dependencies: true,
-        view_watchlist: true,
         view_members: true,
         manage_members: true,
         view_settings: true,
@@ -1735,7 +1734,6 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
           userPermissions = {
             view_overview: true,
             view_dependencies: true,
-            view_watchlist: true,
             view_members: hasOrgManagePermission || hasOwnerTeamManageProjects,
             manage_members: hasOrgManagePermission || hasOwnerTeamManageProjects,
             view_settings: hasOrgManagePermission || hasOwnerTeamManageProjects,
@@ -8039,21 +8037,6 @@ router.post('/:id/ban-version', async (req: AuthRequest, res) => {
       throw banError;
     }
 
-    const { data: watchlistRow } = await supabase
-      .from('organization_watchlist')
-      .select('id, latest_allowed_version')
-      .eq('organization_id', organizationId)
-      .eq('dependency_id', resolvedDependencyId)
-      .maybeSingle();
-    if (watchlistRow && (watchlistRow as any).id) {
-      const currentAllowed = (watchlistRow as any).latest_allowed_version;
-      if (currentAllowed === banned_version || currentAllowed == null) {
-        await supabase
-          .from('organization_watchlist')
-          .update({ latest_allowed_version: bump_to_version })
-          .eq('id', (watchlistRow as any).id);
-      }
-    }
     const { data: orgProjects } = await supabase
       .from('projects')
       .select('id')
@@ -8353,29 +8336,6 @@ router.delete('/:id/ban-version/:banId', async (req: AuthRequest, res) => {
           await invalidateDependencyVersionsCacheByDependencyId(orgDepId).catch((err: any) => {
             console.warn(`[Cache] Failed to invalidate dependency versions cache after removing ban:`, err.message);
           });
-        }
-        const unbannedVersion = (orgDeleted as any)?.banned_version as string | undefined;
-        if (unbannedVersion && orgDepId) {
-          const { data: watchlistRow } = await supabase
-            .from('organization_watchlist')
-            .select('id, latest_allowed_version')
-            .eq('organization_id', organizationId)
-            .eq('dependency_id', orgDepId)
-            .maybeSingle();
-          if (watchlistRow && (watchlistRow as any).id) {
-            const currentAllowed = (watchlistRow as any).latest_allowed_version as string | null;
-            const unbannedCoerced = semver.valid(semver.coerce(unbannedVersion));
-            const currentCoerced = currentAllowed ? semver.valid(semver.coerce(currentAllowed)) : null;
-            const shouldUpdate =
-              currentAllowed == null ||
-              (unbannedCoerced && currentCoerced && semver.gt(unbannedCoerced, currentCoerced));
-            if (shouldUpdate) {
-              await supabase
-                .from('organization_watchlist')
-                .update({ latest_allowed_version: unbannedVersion })
-                .eq('id', (watchlistRow as any).id);
-            }
-          }
         }
         await invalidateAllProjectCachesInOrg(organizationId, { depsOnly: true }).catch((err: any) => {
           console.warn(`[Cache] Failed to invalidate dependencies cache after removing org ban:`, err?.message);

@@ -492,9 +492,7 @@ export async function buildOrgProjects(
     if (membership.role === 'owner') {
       permissions = {
         view_overview: true,
-        view_dependencies: true,
-        view_watchlist: true,
-        view_members: true,
+        view_dependencies: true,        view_members: true,
         manage_members: true,
         view_settings: true,
         edit_settings: true,
@@ -502,9 +500,7 @@ export async function buildOrgProjects(
     } else if (hasOrgManagePermission) {
       permissions = {
         view_overview: true,
-        view_dependencies: true,
-        view_watchlist: true,
-        view_members: true,
+        view_dependencies: true,        view_members: true,
         manage_members: hasOrgManagePermission,
         view_settings: true,
         edit_settings: hasOrgManagePermission,
@@ -513,9 +509,7 @@ export async function buildOrgProjects(
       // User is in owner team with manage_projects permission
       permissions = {
         view_overview: true,
-        view_dependencies: true,
-        view_watchlist: true,
-        view_members: true,
+        view_dependencies: true,        view_members: true,
         manage_members: true,
         view_settings: true,
         edit_settings: true,
@@ -524,9 +518,7 @@ export async function buildOrgProjects(
       // Default viewer permissions
       permissions = {
         view_overview: true,
-        view_dependencies: true,
-        view_watchlist: true,
-        view_members: false,
+        view_dependencies: true,        view_members: false,
         manage_members: false,
         view_settings: false,
         edit_settings: false,

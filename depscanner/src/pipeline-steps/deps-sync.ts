@@ -136,7 +136,7 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
 
       // Phase 19 hybrid: upsert project_dependencies by (project_id, name, version, is_direct, source).
       // UUIDs stay stable across re-extractions; lazarus rows (previously soft-deleted then
-      // returning) get removed_at cleared. dependency_notes + is_watching + ai_usage_summary
+      // returning) get removed_at cleared. dependency_notes + ai_usage_summary
       // survive naturally because FKs don't change. finalize_extraction marks rows absent
       // from this run as removed_at = NOW().
       const projectDepsRaw = dependencies.map((d) => {

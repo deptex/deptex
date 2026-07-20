@@ -285,8 +285,6 @@ describe('Dependency notes + analyze-usage (P0 fixes)', () => {
         data: { id: 'ban-1', dependency_id: 'dep-1', banned_version: '1.0.0' },
         error: null,
       });
-      setTableResponse('organization_watchlist', 'maybeSingle', { data: null, error: null });
-
       const deletedTables: string[] = [];
       queryBuilder.delete.mockImplementation(function (this: any) {
         deletedTables.push(this._table);
