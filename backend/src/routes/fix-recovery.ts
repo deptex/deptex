@@ -19,22 +19,19 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
 }
 
 /**
- * Post an honest machine-crash failure to a task chat — a lead-in beat, a failed
- * step line, and the FixFailureCard (shaped exactly like the worker's
- * postFailureCard so the frontend rehydrates it), and stamp failure_details on
- * the row so the card renders real copy. Ordered by insert time so the chat
- * reads: lead-in → failed step → card, right after the crashed run's last beat.
+ * Post an honest machine-crash failure to a task chat. The chat surface is JUST
+ * a single muted "failed" step line (matching the worker's finalizeFailure
+ * minimalism — no lead-in prose, no card); the full copy is stamped on the row's
+ * failure_details for the task-detail view + logs.
  */
-async function postCrashFailureToChat(
+export async function postCrashFailureToChat(
   supabase: typeof getSupabaseClient,
   job: { id: string; thread_id: string },
 ): Promise<void> {
-  const threadId = job.thread_id;
   const headline = 'The run stopped unexpectedly';
   const explanation =
     'The machine running this task stopped before it could finish — this is on my side, not a problem with your code.';
   const nextStep = "Reply and I'll pick it up again from where I left off.";
-  const leadIn = 'Something interrupted my run on this one before I could wrap up.';
 
   await supabase
     .from('project_security_fixes')
@@ -42,26 +39,10 @@ async function postCrashFailureToChat(
     .eq('id', job.id);
 
   await supabase.from('aegis_chat_messages').insert({
-    thread_id: threadId,
-    role: 'assistant',
-    content: leadIn,
-    metadata: { parts: [{ type: 'text', text: leadIn }] },
-  });
-  await supabase.from('aegis_chat_messages').insert({
-    thread_id: threadId,
+    thread_id: job.thread_id,
     role: 'assistant',
     content: 'Run interrupted',
     metadata: { parts: [{ type: 'step', icon: 'failed', label: 'Run interrupted', status: 'done' }] },
-  });
-  await supabase.from('aegis_chat_messages').insert({
-    thread_id: threadId,
-    role: 'assistant',
-    content: nextStep,
-    metadata: {
-      parts: [
-        { type: 'tool-result', toolCallId: job.id, toolName: 'apply_fix', result: { fixId: job.id, failed: true }, isError: false },
-      ],
-    },
   });
 }
 
