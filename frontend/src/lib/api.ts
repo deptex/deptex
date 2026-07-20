@@ -1421,32 +1421,6 @@ export const api = {
     return fetchWithAuth(url);
   },
 
-  async getAegisAutomations(organizationId: string): Promise<AegisAutomation[]> {
-    return fetchWithAuth(`/api/aegis/automations/${organizationId}`);
-  },
-
-  async createAegisAutomation(organizationId: string, automation: { name: string; description?: string; schedule: string }): Promise<AegisAutomation> {
-    return fetchWithAuth('/api/aegis/automations', {
-      method: 'POST',
-      body: JSON.stringify({ organizationId, ...automation }),
-    });
-  },
-
-  async updateAegisAutomation(organizationId: string, automationId: string, updates: { name?: string; description?: string; schedule?: string; enabled?: boolean }): Promise<AegisAutomation> {
-    return fetchWithAuth(`/api/aegis/automations/${automationId}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  async deleteAegisAutomation(organizationId: string, automationId: string): Promise<{ message: string }> {
-    return fetchWithAuth(`/api/aegis/automations/${automationId}`, { method: 'DELETE' });
-  },
-
-  async runAegisAutomation(organizationId: string, automationId: string): Promise<{ message: string; job: any }> {
-    return fetchWithAuth(`/api/aegis/automations/${automationId}/run`, { method: 'POST' });
-  },
-
   async getAegisInbox(organizationId: string): Promise<AegisInboxMessage[]> {
     return fetchWithAuth(`/api/aegis/inbox/${organizationId}`);
   },
@@ -1602,33 +1576,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     });
-  },
-
-  async streamAegisMessage(
-    orgId: string,
-    threadId: string | null,
-    message: string,
-    context?: { type: string; id: string; projectId?: string },
-  ): Promise<Response> {
-    const token = await getAuthToken();
-    if (!token) throw new Error('Not authenticated');
-
-    const response = await fetch(`${API_BASE_URL}/api/aegis/stream`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      },
-      body: JSON.stringify({ organizationId: orgId, threadId, message, context }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
-    }
-
-    return response;
   },
 
   async getAegisThreadsByProject(orgId: string, projectId?: string): Promise<AegisThread[]> {
@@ -4997,18 +4944,6 @@ export interface AegisActivityLog {
   request_text: string;
   action_performed: string | null;
   result_json: Record<string, any>;
-}
-
-export interface AegisAutomation {
-  id: string;
-  organization_id: string;
-  name: string;
-  description: string | null;
-  schedule: string;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  created_at: string;
 }
 
 export interface AegisInboxMessage {

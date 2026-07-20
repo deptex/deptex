@@ -66,26 +66,6 @@ CREATE TABLE IF NOT EXISTS public.aegis_chat_user_state (
   pinned_at timestamp with time zone,
   archived_at timestamp with time zone
 );
-CREATE TABLE IF NOT EXISTS public.aegis_event_triggers (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  organization_id uuid NOT NULL,
-  automation_id uuid NOT NULL,
-  event_type text NOT NULL,
-  filter_criteria jsonb,
-  enabled boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.aegis_slack_config (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  organization_id uuid NOT NULL,
-  slack_team_id text,
-  slack_bot_token text NOT NULL,
-  slack_signing_secret text NOT NULL,
-  encryption_key_version integer DEFAULT 1,
-  default_channel_id text,
-  enabled boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS public.aegis_tool_executions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -1839,15 +1819,6 @@ CREATE TABLE IF NOT EXISTS public.security_audit_logs (
   user_agent text,
   metadata jsonb DEFAULT '{}'::jsonb,
   severity text DEFAULT 'info'::text,
-  created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.security_debt_snapshots (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  organization_id uuid NOT NULL,
-  project_id uuid,
-  score numeric(10,2) NOT NULL,
-  breakdown jsonb NOT NULL,
-  snapshot_date date NOT NULL DEFAULT CURRENT_DATE,
   created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.silence_events (
@@ -7118,8 +7089,6 @@ ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey P
 ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
-ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pkey PRIMARY KEY (id);
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
@@ -7227,7 +7196,6 @@ ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_pkey PRIMARY KEY (id);
 ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_pkey PRIMARY KEY (id);
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_pkey PRIMARY KEY (id);
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_pkey PRIMARY KEY (id);
@@ -7248,7 +7216,6 @@ ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
 ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_user_id_emoji_key UNIQUE (note_id, user_id, emoji);
 ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_dependency_id_type_target_version_key UNIQUE (project_id, dependency_id, type, target_version);
@@ -7314,7 +7281,6 @@ ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_can
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_organization_watchlist_id_key UNIQUE (project_id, organization_watchlist_id);
 ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
 ALTER TABLE public.silence_events ADD CONSTRAINT silence_events_run_pdv_uniq UNIQUE (extraction_run_id, pdv_id);
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
@@ -7464,8 +7430,6 @@ ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -7675,8 +7639,6 @@ ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organiza
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7729,8 +7691,6 @@ CREATE INDEX idx_aegis_chat_threads_organization_id ON public.aegis_chat_threads
 CREATE INDEX idx_aegis_chat_threads_updated_at ON public.aegis_chat_threads USING btree (updated_at DESC);
 CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING btree (user_id);
 CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
-CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
-CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
 CREATE INDEX idx_aegis_tool_exec_created ON public.aegis_tool_executions USING btree (created_at DESC);
 CREATE INDEX idx_aegis_tool_exec_org ON public.aegis_tool_executions USING btree (organization_id);
 CREATE INDEX idx_aegis_tool_exec_thread ON public.aegis_tool_executions USING btree (thread_id);
@@ -7754,8 +7714,6 @@ CREATE INDEX idx_container_project_finding_key ON public.project_container_findi
 CREATE INDEX idx_container_project_status ON public.project_container_findings USING btree (project_id, status);
 CREATE INDEX idx_dast_project_finding_key ON public.project_dast_findings USING btree (project_id, finding_key);
 CREATE INDEX idx_dast_project_status ON public.project_dast_findings USING btree (project_id, status);
-CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
-CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
 CREATE INDEX idx_demo_requests_created_at ON public.demo_requests USING btree (created_at DESC);
 CREATE INDEX idx_demo_requests_email ON public.demo_requests USING btree (email);
 CREATE INDEX idx_dependencies_github_url ON public.dependencies USING btree (github_url);

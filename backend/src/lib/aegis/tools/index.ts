@@ -12,9 +12,7 @@ import './intelligence';
 import './reporting';
 import './external';
 import './memory';
-import './automation';
 import './learning';
-import './incidents';
 
 export { registerAegisTool, getAllToolMetas, buildToolSet } from './registry';
 export type { AegisToolMeta, ToolContext, ToolCategory, PermissionLevel } from './types';

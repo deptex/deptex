@@ -23,7 +23,6 @@ vi.mock('../../lib/api', () => ({
   api: {
     getAegisThreads: vi.fn().mockResolvedValue([]),
     getAegisThreadMessages: vi.fn().mockResolvedValue([]),
-    getAegisAutomations: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -96,14 +95,6 @@ describe('Aegis frontend', () => {
         const comboboxes = screen.queryAllByRole('combobox');
         expect(comboboxes.length).toBeGreaterThanOrEqual(1);
       });
-    });
-
-    it('99: Automations tab label is present', async () => {
-      const { AegisManagementConsole } = await import('../components/settings/AegisManagementConsole');
-      render(
-        <AegisManagementConsole organizationId="org-1" userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true }} />
-      );
-      expect(screen.getByText(/automations/i)).toBeInTheDocument();
     });
 
     it('Audit Log tab is present', async () => {

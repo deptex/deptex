@@ -27,7 +27,6 @@ vi.mock('../../lib/api', () => ({
   api: {
     getAegisThreads: vi.fn().mockResolvedValue([]),
     getAegisThreadMessages: vi.fn().mockResolvedValue([]),
-    getAegisAutomations: vi.fn().mockResolvedValue([]),
   },
 }));
 

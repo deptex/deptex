@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Settings2, DollarSign, Play, Zap, Brain, BookOpen, AlertTriangle,
+  Settings2, DollarSign, Play, Brain, BookOpen, AlertTriangle,
   BarChart3, FileText, Search, Plus, Trash2, Edit2, Download, Pause, X, Check,
-  Shield, Key, Clipboard, Puzzle, MoreHorizontal, Clock,
+  Shield, Key, Clipboard, Puzzle,
 } from 'lucide-react';
 import { RolePermissions } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -45,7 +45,6 @@ const TOOL_CATEGORIES = [
   { id: 'members', label: 'Members', tools: ['listMembers'] },
   { id: 'policies', label: 'Policies', tools: ['listPolicies', 'getPolicy'] },
   { id: 'projects', label: 'Projects', tools: ['listProjects', 'getProjectOverview'] },
-  { id: 'automations', label: 'Automations', tools: ['listAutomations', 'runAutomation'] },
   { id: 'integrations', label: 'Integrations', tools: ['listIntegrations'] },
   { id: 'reporting', label: 'Reporting', tools: ['generateSecurityReport'] },
   { id: 'memory', label: 'Memory', tools: ['storeMemory', 'retrieveMemory'] },
@@ -56,7 +55,6 @@ const TABS = [
   { id: 'configuration', label: 'Configuration', icon: Settings2 },
   { id: 'spending', label: 'Spending', icon: DollarSign },
   { id: 'active_work', label: 'Active Work', icon: Play },
-  { id: 'automations', label: 'Automations', icon: Zap },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'learning', label: 'Learning', icon: BookOpen },
   { id: 'incidents', label: 'Incidents', icon: AlertTriangle },
@@ -101,10 +99,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
   const [loadingMemories, setLoadingMemories] = useState(false);
   const [memorySearch, setMemorySearch] = useState('');
   const [memoryCategory, setMemoryCategory] = useState<string>('all');
-
-  // Automations
-  const [automations, setAutomations] = useState<any[]>([]);
-  const [loadingAutomations, setLoadingAutomations] = useState(false);
 
   // Tool executions (audit)
   const [toolExecutions, setToolExecutions] = useState<any[]>([]);
@@ -231,30 +225,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
     }
   }, [organizationId]);
 
-  const loadAutomations = useCallback(async () => {
-    setLoadingAutomations(true);
-    try {
-      const data = await fetchWithAuth(`/api/aegis/automations/${organizationId}`);
-      setAutomations(Array.isArray(data) ? data : data?.automations ?? []);
-    } catch {
-      setAutomations([]);
-    } finally {
-      setLoadingAutomations(false);
-    }
-  }, [organizationId]);
-
-  const toggleAutomation = async (id: string, enabled: boolean) => {
-    try {
-      await fetchWithAuth(`/api/aegis/automations/${organizationId}/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ enabled }),
-      });
-      loadAutomations();
-    } catch {
-      toast({ title: 'Failed to update automation', variant: 'destructive' });
-    }
-  };
-
   const loadToolExecutions = useCallback(async () => {
     setLoadingAudit(true);
     try {
@@ -304,9 +274,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
   useEffect(() => {
     if (activeTab === 'memory') loadMemories();
   }, [activeTab, loadMemories]);
-  useEffect(() => {
-    if (activeTab === 'automations') loadAutomations();
-  }, [activeTab, loadAutomations]);
   useEffect(() => {
     if (activeTab === 'audit') loadToolExecutions();
   }, [activeTab, loadToolExecutions]);
@@ -613,49 +580,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
                             Approve
                           </Button>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {activeTab === 'automations' && (
-          <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <p className="text-foreground-secondary">Schedule and manage Aegis automations.</p>
-              <Button>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Automation
-              </Button>
-            </div>
-            <Card className="bg-background-card border-border">
-              <CardContent className="pt-6">
-                {loadingAutomations ? (
-                  <div className="space-y-3">
-                    {[1, 2, 3].map((i) => (
-                      <div key={i} className="h-14 bg-muted animate-pulse rounded" />
-                    ))}
-                  </div>
-                ) : automations.length === 0 ? (
-                  <p className="text-foreground-secondary text-sm">No automations yet.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {automations.map((a: any) => (
-                      <div
-                        key={a.id}
-                        className="flex items-center justify-between border border-border rounded-lg p-4"
-                      >
-                        <div>
-                          <p className="font-medium">{a.name ?? 'Automation'}</p>
-                          <p className="text-sm text-foreground-secondary">{a.schedule ?? a.prompt ?? ''}</p>
-                        </div>
-                        <Switch
-                          checked={a.enabled !== false}
-                          onCheckedChange={(v) => toggleAutomation(a.id, v)}
-                        />
                       </div>
                     ))}
                   </div>

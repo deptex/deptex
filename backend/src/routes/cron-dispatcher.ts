@@ -79,7 +79,7 @@ router.post('/every-min', async (req, res) => {
 /**
  * POST /api/internal/cron/every-5-min
  * Run every 5 minutes (cron: 5-min interval).
- * Jobs: extraction recovery, fix recovery, Aegis due automations.
+ * Jobs: extraction recovery, fix recovery.
  */
 router.post('/every-5-min', async (req, res) => {
   if (!(await verifyInternalAuth(req))) {
@@ -88,7 +88,6 @@ router.post('/every-5-min', async (req, res) => {
   const jobs = [
     '/api/internal/recovery/extraction-jobs',
     '/api/internal/recovery/fix-jobs',
-    '/api/internal/aegis/check-due-automations',
   ];
   const results: JobResult[] = [];
   for (const path of jobs) {
@@ -154,14 +153,13 @@ router.post('/hourly', async (req, res) => {
 /**
  * POST /api/internal/cron/daily
  * Run once per day at 4 AM UTC: 0 4 * * *
- * Jobs: Aegis debt snapshot, learning recompute-patterns, notification cleanup, daily dep-refresh poll.
+ * Jobs: learning recompute-patterns, notification cleanup, daily dep-refresh poll.
  */
 router.post('/daily', async (req, res) => {
   if (!(await verifyInternalAuth(req))) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const jobs = [
-    '/api/internal/aegis/snapshot-debt',
     '/api/internal/learning/recompute-patterns',
     '/api/workers/notification-cleanup',
     '/api/workers/watchtower-daily-poll',

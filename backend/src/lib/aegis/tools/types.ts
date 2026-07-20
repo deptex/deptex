@@ -7,8 +7,7 @@ export type ToolCategory =
   | 'intelligence'
   | 'reporting'
   | 'external'
-  | 'memory'
-  | 'automation';
+  | 'memory';
 
 export type PermissionLevel = 'safe' | 'moderate' | 'dangerous';
 
@@ -47,7 +46,6 @@ export const TOOL_PROFILES = {
     'createSecuritySprint', 'getSprintStatus', 'assessBlastRadius',
     'emergencyLockdownPackage', 'getReachabilityFlows', 'analyzeUpgradePath',
     'getSLAStatus',
-    'declareIncident', 'getIncidentStatus', 'listActiveIncidents',
   ],
   policy: [
     'listPolicies', 'getPolicy', 'createPolicy', 'updatePolicy', 'deletePolicy',
@@ -64,7 +62,6 @@ export const TOOL_PROFILES = {
   admin: [
     'createTeam', 'updateTeam', 'deleteTeam', 'inviteMember', 'removeMember',
     'updateMemberRole', 'triggerExtraction',
-    'createScheduledJob', 'updateScheduledJob', 'deleteScheduledJob',
   ],
   compliance: [
     'getComplianceStatus', 'generateSBOM', 'generateVEX', 'generateLicenseNotice',

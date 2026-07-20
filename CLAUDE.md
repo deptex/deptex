@@ -118,12 +118,11 @@ Reachability comes from the cross-file taint engine (`depscanner/src/taint-engin
 
 ### Aegis AI Agent
 ```
-POST /api/aegis/v2/stream (AI SDK SSE, useChat on frontend)
+POST /api/aegis/v3/stream (AI SDK SSE, useChat on frontend)
   -> platform-key model via llm-provider.ts, pgvector memory context
-  -> Vercel AI SDK streamText(maxSteps) with 50+ tools across 10 categories
+  -> Vercel AI SDK streamText(maxSteps) with a permission-gated toolset
   -> Tool permission checks (RBAC + danger level), approval flow for dangerous tools
   -> Task system: plan-then-execute with QStash step execution, circuit breaker
-  -> Sprint orchestration: batch fix discovery and AI fix scheduling
 ```
 
 ### Policy Engine

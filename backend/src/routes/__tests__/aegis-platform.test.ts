@@ -1,7 +1,7 @@
 /**
  * Aegis Autonomous Security Platform test suite.
  *
- * Backend: permissions, tool registry, task system, security debt, sprint orchestration.
+ * Backend: permissions, tool registry, task system.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -204,80 +204,4 @@ describe('Aegis Autonomous Security Platform', () => {
     });
   });
 
-  describe('Security Debt (7B-M)', () => {
-    it('107: computeDebtScore returns breakdown with zero score when no projects', async () => {
-      const { computeDebtScore } = await import('../../lib/aegis/security-debt');
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'projects') return chainableQuery([]);
-        return chainableQuery([]);
-      });
-
-      const result = await computeDebtScore(ORG_ID);
-      expect(result.score).toBe(0);
-      expect(result.breakdown).toEqual({
-        vulns: 0,
-        compliance: 0,
-        staleDeps: 0,
-        codeIssues: 0,
-        secrets: 0,
-      });
-    });
-  });
-
-  describe('Sprint Orchestration (7B-N)', () => {
-    it('createSecuritySprint returns error when max concurrent sprints', async () => {
-      const { createSecuritySprint } = await import('../../lib/aegis/sprint-orchestrator');
-      const sprintChain = chainableQuery([], null);
-      (sprintChain as any).like = jest.fn().mockReturnValue(sprintChain);
-      (sprintChain as any).in = jest.fn().mockReturnValue(
-        Promise.resolve({ data: [], count: 3, error: null })
-      );
-
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'aegis_tasks') return sprintChain;
-        if (table === 'projects') return chainableQuery([]);
-        return chainableQuery(null, null);
-      });
-
-      const result = await createSecuritySprint({
-        organizationId: ORG_ID,
-        userId: USER_ID,
-        mode: 'auto',
-      });
-
-      expect(result.error).toMatch(/concurrent|maximum/i);
-    });
-
-    it('createSecuritySprint returns error when no fixable issues (no projects)', async () => {
-      const { createSecuritySprint } = await import('../../lib/aegis/sprint-orchestrator');
-      const sprintChain = chainableQuery([], null);
-      (sprintChain as any).like = jest.fn().mockReturnValue(sprintChain);
-      (sprintChain as any).in = jest.fn().mockReturnValue(
-        Promise.resolve({ data: [], count: 0, error: null })
-      );
-
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'aegis_tasks') return sprintChain;
-        if (table === 'projects') return chainableQuery([]);
-        return chainableQuery(null, null);
-      });
-
-      const result = await createSecuritySprint({
-        organizationId: ORG_ID,
-        userId: USER_ID,
-        mode: 'auto',
-      });
-
-      expect(result.error).toMatch(/no fixable|no fix/i);
-      expect(result.taskId).toBeUndefined();
-    });
-  });
-
-  describe('Automations (7B-E) — plan tests 31–36', () => {
-    it('cronMatchesNow parses cron expression (every minute matches)', async () => {
-      const { cronMatchesNow } = await import('../../lib/aegis/automations-engine');
-      expect(cronMatchesNow('* * * * *', 'UTC')).toBe(true);
-      expect(cronMatchesNow('0 0 1 1 *', 'UTC')).toBe(false);
-    });
-  });
 });
