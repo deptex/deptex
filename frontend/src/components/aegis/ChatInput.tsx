@@ -62,7 +62,7 @@ function ContextRing({ usage }: { usage: ContextUsage }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 cursor-default" aria-label={label}>
+        <span className="inline-flex items-center justify-center rounded-md p-1 cursor-default" aria-label={label}>
           <svg width="18" height="18" viewBox="0 0 18 18" className={tone}>
             <circle cx="9" cy="9" r={R} fill="none" stroke="currentColor" strokeOpacity={0.18} strokeWidth={2.5} />
             <circle
@@ -79,7 +79,6 @@ function ContextRing({ usage }: { usage: ContextUsage }) {
               style={{ transition: 'stroke-dashoffset 500ms ease' }}
             />
           </svg>
-          <span className="text-[11px] tabular-nums text-foreground-secondary">{percent}%</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -259,9 +258,10 @@ export function ChatInput({
               />
             )
           )}
-          {contextUsage && <ContextRing usage={contextUsage} />}
         </div>
-        {listening ? (
+        <div className="flex items-center gap-2">
+          {contextUsage && <ContextRing usage={contextUsage} />}
+          {listening ? (
           <button
             type="button"
             onClick={() => stopSpeech()}
@@ -304,6 +304,7 @@ export function ChatInput({
             <Mic className="h-4 w-4" />
           </button>
         )}
+        </div>
       </div>
     </form>
   );
