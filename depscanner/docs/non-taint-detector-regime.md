@@ -37,7 +37,7 @@ helper that the prototype lane does not own.
 
 ## Corpus scope
 
-From `.cursor/plans/triage-2026-05-12-post-abcd.json`, the 8 entries with
+From the F4-non-taint triage set, the 8 entries with
 `bucket: "F4_non_taint"` plus 2 borderline E3-overlap entries that depend
 on sanitizer-absence shape, mapped to sub-regime:
 
@@ -378,6 +378,5 @@ F4-bucket from triage. The above assumes 1 follow-up cycle per spec.
 - Prototype: `src/taint-engine/non-taint-detector.ts`
 - Prototype test: `src/__tests__/non-taint-detector.test.ts`
 - Recall ceiling discussion: `docs/path-to-90-percent-recall.md`
-- Triage: `.cursor/plans/triage-2026-05-12-post-abcd.json`
 - Existing sink shape: `src/taint-engine/spec.ts` → `FrameworkSink`
 - Existing flow output shape: `src/taint-engine/flow.ts` → `Flow`

@@ -98,8 +98,7 @@ The runner is wired into `taint-engine-preflight.ts` as stage
 pre-merge preflight via `npm run test:taint-engine-all`. Wall-clock budget
 on a fresh checkout: ≤30s for all 5 starter fixtures combined.
 
-Per the reachability-90-percent plan (Phase 1.3a in
-`.cursor/plans/reachability-toward-100-roadmap.md`), this suite gates the
+Per the reachability-90-percent plan (Phase 1.3a), this suite gates the
 "the engine actually finds customer-shaped CVEs" assertion separately from
 the synthetic single-shape fixtures the existing test surface covers.
 

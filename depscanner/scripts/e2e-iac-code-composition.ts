@@ -30,8 +30,7 @@
  * scripts/e2e-iac-code-composition.baseline.json (committed). A drift
  * fails the run loudly so we notice silent regressions.
  *
- * Docker / live-API parity: see Risks #4 in
- * .cursor/plans/iac-container-v2-item-g.plan.md — the real-binary
+ * Docker / live-API parity: the real-binary
  * readelf invocation runs inside the depscanner Docker image during
  * a full extraction; that path is unchanged here and is covered by
  * the existing scanner orchestrator integration tests + the
