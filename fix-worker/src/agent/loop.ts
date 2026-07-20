@@ -472,6 +472,15 @@ export async function runTaskAgent(
     clearTimeout(wallTimer);
   }
 
+  // A user Stop just stops — nothing else. No "Task cancelled" beat, no failure
+  // card, no trailing prose: the row is already terminal ('rejected', set by the
+  // cancel), so this run posts NOTHING and returns. (A machine-mismatch zombie —
+  // a wake reassigned the row to another machine — takes this same silent path;
+  // the owning machine drives the thread.) Returns before any chat write.
+  if (abortReason === 'cancelled') {
+    return { replayedThrough, cancelled: true };
+  }
+
   // Safety: flush any narration queued by the final step whose onStepFinish may
   // not have run (e.g. the PR step if the loop ended right after it).
   for (const st of state.pendingSteps.splice(0)) {

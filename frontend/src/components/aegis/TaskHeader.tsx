@@ -13,8 +13,8 @@ function RowGlyph({ status }: { status: AegisTask['status'] }) {
   if (status === 'working') return <Loader2 className={`${cls} animate-spin`} />;
   if (status === 'completed' || status === 'completed_with_failures')
     return <CircleCheck className={cls} />;
-  if (status === 'failed' || status === 'cancelled' || status === 'declined')
-    return <CircleX className={cls} />;
+  // A user Stop ('cancelled') is not a failure — a neutral dot, not the X.
+  if (status === 'failed' || status === 'declined') return <CircleX className={cls} />;
   return <Circle className={cls} />;
 }
 

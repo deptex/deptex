@@ -739,6 +739,18 @@ export async function cancelTask(args: {
       .in('status', ['planning', 'approved', 'executing']);
   }
 
+  // A Stop is user-terminal, not an error: land the task on 'cancelled' (reads as
+  // a neutral "stopped") rather than letting the rollup count the rejected row as
+  // 'failed'. The trigger early-returns for 'cancelled' tasks so this sticks; a
+  // later follow-up un-cancels it via wake_agent_fix. Skip when rows were RESTORED
+  // (a resume-of-completed Stop must re-complete, not cancel).
+  if (rejectIds.length > 0 && restoreIds.length === 0) {
+    await supabase
+      .from('aegis_agent_tasks')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', taskId);
+  }
+
   await logSecurityEvent({
     organizationId,
     actorId: userId,

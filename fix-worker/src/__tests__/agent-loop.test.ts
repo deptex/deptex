@@ -100,7 +100,7 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('not_fixable');
   });
 
-  test('a cancelled run finalizes as cancelled and reports cancelled=true (drain skip)', async () => {
+  test('a user Stop is SILENT — no failure card/beat posted — and reports cancelled=true (drain skip)', async () => {
     (isJobCancelled as jest.Mock).mockResolvedValue(true);
     (generateText as jest.Mock).mockImplementation(async (opts: any) => {
       await opts.onStepFinish({ text: '' });
@@ -112,9 +112,9 @@ describe('runTaskAgent — always-terminal guarantee', () => {
       return {};
     });
     const res = await runTaskAgent({} as any, makeInput(), makeDeps());
-    expect(finalizeFailure).toHaveBeenCalledTimes(1);
-    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('cancelled');
-    // The caller skips the end-of-run drain on a user Stop.
+    // A Stop just stops: no "Task cancelled" card/beat/prose is written.
+    expect(finalizeFailure).not.toHaveBeenCalled();
+    // The caller still skips the end-of-run drain on a user Stop.
     expect(res.cancelled).toBe(true);
     // The cancel probe carries this machine's id — a reassigned (zombie) run
     // aborts on machine mismatch, not just on status='rejected'.
