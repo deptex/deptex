@@ -289,7 +289,7 @@ export async function runTaskAgent(
   // failure — see maybeFinalizeAnsweredNaturalStop.
   let narrated = false;
 
-  let prompt = buildBrief({
+  const prompt = buildBrief({
     fixType: input.fixType,
     finding: input.finding,
     summary: input.summary,
@@ -299,18 +299,17 @@ export async function runTaskAgent(
     repoRootListing,
   });
 
-  // TEST-ONLY overflow lever (never set in normal operation): pad the opening
-  // prompt with filler so a fresh run deterministically exceeds the model's REAL
-  // context window and the provider hard-400s. That branch — the belt to the 90%
-  // soft-stop's suspenders — can't be reproduced naturally, because output caps +
-  // the soft-stop keep any real run well under the window. AEGIS_TASK_TEST_PAD_TOKENS
-  // is the token count of filler to append (~4 chars/token). Only fresh runs pad;
-  // resumes replay a bounded history and must stay recoverable.
+  // TEST-ONLY overflow lever (never set in normal operation): filler appended to
+  // the FIRST pass's opening message so a fresh run overflows the window and the
+  // loop must auto-compact. Deliberately NOT baked into `prompt` — the compaction
+  // re-seeds the (small) brief, so keeping the pad out of it lets a test overflow
+  // compact-then-continue instead of re-injecting the pad every cycle.
   const padTokens = parseInt(process.env.AEGIS_TASK_TEST_PAD_TOKENS || '', 10);
-  if (!input.resume && Number.isFinite(padTokens) && padTokens > 0) {
-    console.log(`[test] padding opening prompt with ~${padTokens} filler tokens to force a context overflow`);
-    prompt = `${prompt}\n\n<!-- test-pad -->\n${'lorem ipsum dolor sit amet '.repeat(Math.ceil(padTokens / 5))}`;
-  }
+  const padSuffix =
+    !input.resume && Number.isFinite(padTokens) && padTokens > 0
+      ? `\n\n<!-- test-pad -->\n${'lorem ipsum dolor sit amet '.repeat(Math.ceil(padTokens / 5))}`
+      : '';
+  if (padSuffix) console.log(`[test] padding the first pass with ~${padTokens} filler tokens to force a context overflow`);
 
   let replayedThrough: string | null = null;
 
@@ -401,7 +400,8 @@ export async function runTaskAgent(
       input.baseBranch,
     );
   } else {
-    messages = [{ role: 'user', content: prompt }];
+    // padSuffix is '' in normal operation; only a test overflow appends filler.
+    messages = [{ role: 'user', content: prompt + padSuffix }];
   }
 
   // Auto-compaction loop: the run keeps going across context-window refills. A
