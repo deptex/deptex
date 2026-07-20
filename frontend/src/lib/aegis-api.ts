@@ -300,6 +300,16 @@ export const aegisApi = {
     });
   },
 
+  /** "Compact context" — the context-limit card's action. Wakes the task agent to
+   *  resume on a compacted history (posts a "Context compacted" beat, not a bubble). */
+  async compactTaskContext(taskId: string, organizationId: string):
+    Promise<{ woke: boolean; queued: boolean; threadId: string }> {
+    return fetchWithAuth(`/api/aegis/tasks/${taskId}/compact`, {
+      method: 'POST',
+      body: JSON.stringify({ organizationId }),
+    });
+  },
+
   /** Send-to-Aegis: create a task from a finding. Returns the proposed task + its chat. */
   async createTaskFromFinding(body: {
     organizationId: string;

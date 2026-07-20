@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, FileDiff, TerminalSquare } from 'lucide-react';
+import { AlertTriangle, ChevronDown, FileDiff, TerminalSquare, Layers, Loader2 } from 'lucide-react';
 import { api, type FixRecord } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -11,6 +11,51 @@ import { supabase } from '../../lib/supabase';
 
 interface FixFailureCardData {
   fixId?: string;
+}
+
+// The context-limit variant: a deliberately minimal card — just the headline and
+// a "Compact context" action that wakes the agent to resume on a compacted view.
+// Rendered instead of the full failure layout when the fix stopped on
+// context_exhausted (a recoverable limit, not an error).
+function ContextLimitCard({
+  status,
+  onCompact,
+}: {
+  status: FixRecord['status'] | undefined;
+  onCompact?: () => void;
+}) {
+  const [compacting, setCompacting] = useState(false);
+  const resumable = status === 'failed';
+  return (
+    <div className="my-2 overflow-hidden rounded-lg border border-border bg-background-card">
+      <div className="flex items-center gap-2.5 px-4 py-3">
+        <Layers className="h-4 w-4 shrink-0 text-foreground-secondary" />
+        <span className="text-sm font-medium text-foreground">Context window limit reached</span>
+        <div className="ml-auto shrink-0">
+          {resumable && !compacting && onCompact ? (
+            <button
+              type="button"
+              onClick={() => {
+                setCompacting(true);
+                onCompact();
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:bg-foreground/90 transition-colors"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              Compact context
+            </button>
+          ) : status === 'completed' ? (
+            <span className="text-xs text-foreground-secondary">Context compacted</span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-xs text-foreground-secondary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Compacting
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // A raw udiff, line-coloured so the attempt is skimmable.
@@ -64,7 +109,13 @@ function Section({
   );
 }
 
-export function FixFailureCard({ data }: { data?: FixFailureCardData }) {
+export function FixFailureCard({
+  data,
+  onCompactContext,
+}: {
+  data?: FixFailureCardData;
+  onCompactContext?: () => void;
+}) {
   const fixId = data?.fixId;
   const [fix, setFix] = useState<FixRecord | null>(null);
 
@@ -105,6 +156,14 @@ export function FixFailureCard({ data }: { data?: FixFailureCardData }) {
   if (!data) return null;
 
   const d = fix?.failureDetails ?? null;
+
+  // Context-limit is a recoverable stop, not a failure — render the minimal
+  // "Context window limit reached" card with the Compact action instead of the
+  // full what-I-tried failure layout.
+  if (fix?.errorCategory === 'context_exhausted' || d?.category === 'context_exhausted') {
+    return <ContextLimitCard status={fix?.status} onCompact={onCompactContext} />;
+  }
+
   const headline = d?.headline ?? "I couldn't complete this fix";
   const explanation = d?.explanation ?? fix?.errorMessage ?? null;
   const nextStep = d?.nextStep ?? null;

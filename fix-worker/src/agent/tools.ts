@@ -903,15 +903,16 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     stepLabel = 'Paused — needs another run';
     nextStep = "Reply and I'll pick it up again from where I left off.";
   } else if (category === 'context_exhausted') {
-    // The run read enough that the model's context window filled. Recoverable:
-    // a reply wakes a resume that rebuilds a COMPACTED history (replay's tail
-    // budget), so the follow-up genuinely continues rather than re-overflowing.
-    headline = 'This got too big to finish in one pass';
-    explanation =
-      "I read enough of the code that I ran out of room to keep going in a single run — I stopped rather than lose track.";
-    leadIn = "I've taken in about as much as I can hold in one pass — stopping here so I don't lose the thread.";
-    stepLabel = 'Reached the context limit';
-    nextStep = "Reply and I'll continue with a fresh, compacted view of what I've done so far.";
+    // The run filled the model's context window. Recoverable via the dedicated
+    // "Compact context" action on the card, which wakes a resume that rebuilds a
+    // COMPACTED history (replay's tail budget) and continues. The card is
+    // deliberately minimal — just the headline + the Compact button — so the
+    // extra prose beat + gray failed line are SKIPPED for this category below.
+    headline = 'Context window limit reached';
+    explanation = "The run filled the model's context window before it could finish.";
+    leadIn = '';
+    stepLabel = 'Context window limit reached';
+    nextStep = '';
   } else {
     // not_fixable (the agent's own stated reason) — safe, first-person copy
     // from describeFailure (shared with the old pipeline; not touched here).
@@ -936,14 +937,24 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     },
     deps.machineId,
   );
-  await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
-  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, nextStep);
+  // context_exhausted renders as a minimal, self-contained card (headline +
+  // "Compact context" button — the frontend keys off failure_details.category),
+  // so it skips the gray "failed" step line and the lead-in prose beat that the
+  // other categories post. Every other category keeps the full narration.
+  const minimalCard = category === 'context_exhausted';
+  if (!minimalCard) {
+    await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
+  }
+  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, minimalCard ? '' : nextStep);
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });
-  // Post the lead-in as a prose beat (best-effort — no throw).
-  try {
-    const { makeTaskNarrator } = await import('./../task-chat');
-    await makeTaskNarrator(deps.supabase, deps.threadId)(leadIn);
-  } catch {
-    /* narration is best-effort */
+  // Post the lead-in as a prose beat (best-effort — no throw). Skipped for the
+  // minimal card, which carries all the copy it needs.
+  if (!minimalCard && leadIn) {
+    try {
+      const { makeTaskNarrator } = await import('./../task-chat');
+      await makeTaskNarrator(deps.supabase, deps.threadId)(leadIn);
+    } catch {
+      /* narration is best-effort */
+    }
   }
 }

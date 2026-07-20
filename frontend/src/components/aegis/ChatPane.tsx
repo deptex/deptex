@@ -156,7 +156,11 @@ function formatRunStatus(s: TaskRunStatus): string {
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
-  return stored.map((msg) => {
+  return stored
+    // Hidden turns (e.g. the "continue" instruction behind a Compact-context
+    // action) are replayed for the model but never shown in the thread.
+    .filter((msg) => !(msg.metadata as any)?.hidden)
+    .map((msg) => {
     const parts: any[] = [];
     const rawParts: MessagePart[] = msg.metadata?.parts ?? [];
 
@@ -830,6 +834,21 @@ export function ChatPane({
     [task, organizationId, setMessages, setTaskWorking, setFollowupPollNonce],
   );
 
+  // "Compact context" (the context-limit card's action) — wakes the task agent to
+  // resume on a compacted history. The worker posts the "Context compacted" beat
+  // and continues; here we just flip to working + arm the poll so the UI reacts
+  // instantly (realtime reconciles the persisted beat).
+  const handleCompactContext = useCallback(() => {
+    if (!task) return;
+    setSendError(null);
+    setCommandOutput(null);
+    setTaskWorking(true);
+    setFollowupPollNonce((n) => n + 1);
+    void aegisApi
+      .compactTaskContext(task.id, organizationId)
+      .catch(() => setSendError('Something went wrong. Please try again.'));
+  }, [task, organizationId, setTaskWorking, setFollowupPollNonce]);
+
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -1130,6 +1149,7 @@ export function ChatPane({
               isRegenerating={i === latestErrorIdx && isRegenerating}
               onTopUp={(reason) => setTopUp({ open: true, reason })}
               canManageBilling={canManageBilling}
+              onCompactContext={handleCompactContext}
             />
           ))}
           {showThinkingDot && (

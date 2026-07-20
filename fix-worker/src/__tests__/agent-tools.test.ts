@@ -548,12 +548,15 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget/i);
   });
 
-  test('a context exhaustion is honest + resumable (never a transient "try again later")', async () => {
+  test('a context exhaustion renders the minimal card — no failed step beat, no transient-retry copy', async () => {
     const deps = makeDeps();
     await finalizeFailure(deps, 'context_exhausted', 'Reached the context-window limit before finishing.');
     const details = (markFailed as jest.Mock).mock.calls[0][4];
     expect((markFailed as jest.Mock).mock.calls[0][3]).toBe('context_exhausted');
-    expect(details.nextStep).toMatch(/reply/i);
+    expect(details.headline).toMatch(/context window limit reached/i);
+    // The minimal card carries its own headline + the "Compact context" action,
+    // so this category SKIPS the gray "failed" step beat + the lead-in prose.
+    expect(narrateStep).not.toHaveBeenCalled();
     // Must NOT masquerade as a transient infra hiccup (whose advice — retry —
     // would just re-overflow).
     expect(`${details.headline} ${details.explanation}`).not.toMatch(/temporary problem|try (running )?again/i);

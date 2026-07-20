@@ -23,6 +23,8 @@ interface MessageBubbleProps {
   onTopUp?: (reason: TopUpReason) => void;
   /** Whether the viewer can actually pay — gates the "Top up" button. */
   canManageBilling?: boolean;
+  /** "Compact context" action for the context-limit card (task threads only). */
+  onCompactContext?: () => void;
 }
 
 function extractText(message: UIMessage): string {
@@ -49,6 +51,7 @@ export function MessageBubble({
   isRegenerating,
   onTopUp,
   canManageBilling,
+  onCompactContext,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const parts = (message as any).parts ?? [];
@@ -159,7 +162,9 @@ export function MessageBubble({
       if (toolName === 'apply_fix' && !isError) {
         flushTools();
         if (failedFix) {
-          elements.push(<FixFailureCard key={`fail-${i}`} data={part.output as any} />);
+          elements.push(
+            <FixFailureCard key={`fail-${i}`} data={part.output as any} onCompactContext={onCompactContext} />,
+          );
         } else {
           elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
         }
