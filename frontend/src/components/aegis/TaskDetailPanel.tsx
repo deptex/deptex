@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PanelRight, Loader2 } from 'lucide-react';
 import { api, type FixChangeFile, type VulnerabilityDetail } from '../../lib/api';
-import { aegisApi, type AegisTask, type AegisTaskTarget, type TaskRunStatus } from '../../lib/aegis-api';
+import { aegisApi, type AegisTask, type AegisTaskTarget } from '../../lib/aegis-api';
 import { supabase } from '../../lib/supabase';
 import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
 import { FileDiffCard } from './FileDiffCard';
@@ -246,33 +246,6 @@ function ChangesTab({
   );
 }
 
-// A thin context-window meter for the active agent run — mirrors Claude
-// Code's "context left" signal. Neutral until ~75% (amber) / ~90% (red, where
-// the worker soft-stops and asks the user to reply-to-continue). Only rendered
-// while a run is active and we have a real usage reading.
-function ContextMeter({ run }: { run: NonNullable<TaskRunStatus['run']> }) {
-  if (run.contextPct == null) return null;
-  const pct = Math.max(0, Math.min(1, run.contextPct));
-  const percent = Math.round(pct * 100);
-  const tone = pct >= 0.9 ? 'bg-destructive' : pct >= 0.75 ? 'bg-warning' : 'bg-foreground/40';
-  return (
-    <div className="px-6 pb-3 pt-1">
-      <div className="mb-1 flex items-center justify-between text-[11px] text-foreground-secondary">
-        <span>Context used</span>
-        <span className="font-mono tabular-nums">
-          {percent}%{pct >= 0.9 ? ' · will pause soon' : ''}
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-background-subtle">
-        <div
-          className={`h-full rounded-full transition-[width] duration-500 ${tone}`}
-          style={{ width: `${Math.max(2, percent)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function TabButton({
   active,
   onClick,
@@ -318,7 +291,6 @@ export function TaskDetailPanel({
   const [prUrl, setPrUrl] = useState<string | null>(null);
   const [changesLoading, setChangesLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
-  const [runStatus, setRunStatus] = useState<TaskRunStatus | null>(null);
 
   // Stop a running task — the kill switch for an autonomous agent that writes
   // files and opens PRs. Rejects its in-flight fix so the worker aborts.
@@ -444,35 +416,6 @@ export function TaskDetailPanel({
     };
   }, [task?.threadId]);
 
-  // Live run telemetry for the context meter. Refetches on the same message-
-  // insert tick the change set uses, plus a slow poll while the run is active
-  // (a step that produces no chat beat wouldn't otherwise refresh the meter).
-  useEffect(() => {
-    const taskId = task?.id;
-    const orgId = task?.organizationId;
-    if (!taskId || !orgId || !open) {
-      setRunStatus(null);
-      return;
-    }
-    let cancelled = false;
-    const load = () => {
-      aegisApi.getTaskRunStatus(taskId, orgId).then(
-        (s) => {
-          if (!cancelled) setRunStatus(s);
-        },
-        () => {
-          /* transient — keep the last value */
-        },
-      );
-    };
-    load();
-    const interval = task?.status === 'working' ? window.setInterval(load, 4000) : undefined;
-    return () => {
-      cancelled = true;
-      if (interval !== undefined) window.clearInterval(interval);
-    };
-  }, [task?.id, task?.organizationId, task?.status, refreshTick, open]);
-
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -548,8 +491,6 @@ export function TaskDetailPanel({
                 </TabButton>
               </div>
             </div>
-
-            {task.status === 'working' && runStatus?.run && <ContextMeter run={runStatus.run} />}
 
             <div className="flex-1 overflow-y-auto custom-scrollbar">
               {tab === 'task' ? (
