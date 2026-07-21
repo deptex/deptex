@@ -148,10 +148,10 @@ router.post('/fix-jobs', async (_req, res) => {
 
     // Failure-experience contract on the crash path: a machine crash otherwise
     // ends the task chat mid-narration ("Reading src/…") while the sidebar
-    // silently flips to failed — no card, no honest "here's what happened". For
-    // each just-failed AGENT row with a task thread that we did NOT crash-wake
-    // above, post an honest failure card + set failure_details (the RPC leaves
-    // it null) so the chat + FixFailureCard read truthfully. Best-effort.
+    // silently flips to failed — no honest "here's what happened". For each
+    // just-failed AGENT row with a task thread that we did NOT crash-wake above,
+    // post the red "Something went wrong" step line + set failure_details (the RPC
+    // leaves it null) so the chat reads truthfully. Best-effort.
     if (Array.isArray(failed)) {
       for (const job of failed) {
         if (job.strategy !== 'agent' || !job.thread_id || wokenIds.has(job.id)) continue;

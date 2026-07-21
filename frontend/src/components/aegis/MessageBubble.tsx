@@ -7,7 +7,6 @@ import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
 import { ChangeCard } from './ChangeCard';
-import { FixFailureCard } from './FixFailureCard';
 import { TaskStepLine } from './TaskStepLine';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
@@ -152,15 +151,13 @@ export function MessageBubble({
         return;
       }
 
-      // apply_fix (task chats): a successful change renders the ChangeCard (the
-      // applied change + PR link); a failed one renders the FixFailureCard (what
-      // it tried + the real error + a next step). The worker flags failures with
-      // result.failed so this doesn't collide with the gray error pill.
+      // apply_fix: a successful change renders the ChangeCard (the applied change
+      // + PR link). Failures no longer post an apply_fix part at all — the worker
+      // narrates a plain failure step line (no card, no raw error) — so a stray
+      // failed:true part from old history simply renders nothing.
       if (toolName === 'apply_fix' && !isError) {
         flushTools();
-        if (failedFix) {
-          elements.push(<FixFailureCard key={`fail-${i}`} data={part.output as any} />);
-        } else {
+        if (!failedFix) {
           elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
         }
         return;

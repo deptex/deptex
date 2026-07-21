@@ -32,7 +32,6 @@ import {
   narrateStep,
   generateVoiceLine,
   postPrReadyCard,
-  postFailureCard,
   describeFailure,
   getProjectName,
   markTaskFromFix,
@@ -485,8 +484,9 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       job.plan?.fileChanges?.[0]?.path;
     const copy = describeFailure(category, message, { primaryFile });
 
-    // Record what was tried + why it stopped, so the FixFailureCard can show
-    // it. Machine-fenced: harmless for standalone fixes (claimed under this
+    // Record what was tried + why it stopped on failure_details (logs + detail
+    // view only — never rendered in the chat). Machine-fenced: harmless for
+    // standalone fixes (claimed under this
     // machine), and it stops a zombie write onto a woken agent row that a NEW
     // machine has since claimed.
     await markFailed(
@@ -506,11 +506,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       MACHINE_ID,
     );
 
-    // Show the work: an honest lead-in beat → a failed step → the card with the
-    // evidence (what I tried + the real error + the next step).
+    // Failure surface = an honest lead-in beat → a failed step line. No card:
+    // the attempted diff + real error live only on failure_details (logs / detail
+    // view), never in the chat. (The old FixFailureCard was retired.)
     await narrate(copy.leadIn);
     await step({ icon: 'failed', label: copy.stepLabel });
-    await postFailureCard(supabase, fullRow.thread_id, job.id, copy.nextStep);
     await markTaskFromFix(supabase, fullRow.task_id, { status: 'failed', summary: copy.headline });
   } finally {
     clearInterval(heartbeat);

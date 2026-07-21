@@ -245,40 +245,6 @@ export function describeFailure(
   }
 }
 
-// Post the failure card into the task chat. Same tool-result shape as the PR-ready
-// card (so it rehydrates into a card that live-subscribes to the fix row), but
-// flagged `failed` so the frontend renders the FixFailureCard instead. The card
-// reads failure_details off the fix row: what was tried + the real error.
-export async function postFailureCard(
-  supabase: SupabaseClient,
-  threadId: string | null | undefined,
-  fixId: string,
-  caption: string,
-  category?: string,
-): Promise<void> {
-  if (!threadId) return;
-  const { error } = await supabase.from('aegis_chat_messages').insert({
-    thread_id: threadId,
-    role: 'assistant',
-    content: caption,
-    metadata: {
-      parts: [
-        {
-          type: 'tool-result',
-          toolCallId: fixId,
-          toolName: 'apply_fix',
-          // `category` lets the frontend pick the right card (context-limit vs
-          // generic failure) on the first paint, before it fetches the fix row —
-          // so a context-limit card never flashes the red failure card first.
-          result: { fixId, failed: true, category },
-          isError: false,
-        },
-      ],
-    },
-  });
-  if (error) console.warn('[FIX] failure card post failed:', error.message);
-}
-
 /** The project's display name, for narrating by name instead of by id. */
 export async function getProjectName(supabase: SupabaseClient, projectId: string): Promise<string> {
   const { data } = await supabase.from('projects').select('name').eq('id', projectId).maybeSingle();

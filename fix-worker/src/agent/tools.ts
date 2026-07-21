@@ -28,7 +28,7 @@ const MAX_LIST_ENTRIES = 500;
 
 /**
  * Terminal categories the agent can resolve to. Mirrors the vocabulary
- * `describeFailure` understands so the FixFailureCard reads honestly.
+ * `describeFailure` understands so the failure line + stored copy read honestly.
  * 'stall' is loop-detected only — it is deliberately NOT in finish_task's
  * schema (the model shouldn't self-report it).
  */
@@ -830,7 +830,7 @@ export async function maybeFinalizeAnsweredNaturalStop(
   }
 }
 
-/** The single terminal-failure writer: markFailed + honest FixFailureCard + task rollup. */
+/** The single terminal-failure writer: markFailed + the muted failure step line + task rollup. */
 export async function finalizeFailure(deps: AgentToolDeps, category: FinishCategory, message: string): Promise<void> {
   if (deps.state.terminal) return;
 

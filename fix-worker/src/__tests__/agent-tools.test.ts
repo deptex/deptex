@@ -24,7 +24,6 @@ jest.mock('../task-chat', () => {
   return {
     narrateStep: jest.fn(async () => {}),
     postPrReadyCard: jest.fn(async () => {}),
-    postFailureCard: jest.fn(async () => {}),
     describeFailure: () => ({ headline: 'h', explanation: 'e', nextStep: 'n', leadIn: 'l', stepLabel: 's' }),
     markTaskFromFix: jest.fn(async () => {}),
     makeTaskNarrator: jest.fn(() => narrator),
@@ -45,7 +44,7 @@ import {
 } from '../agent/tools';
 import { commitAndPushFix, openPullRequest } from '../pr';
 import { markCompleted, markFailed, markAnswered } from '../job-db';
-import { markTaskFromFix, narrateStep, postPrReadyCard, postFailureCard } from '../task-chat';
+import { markTaskFromFix, narrateStep, postPrReadyCard } from '../task-chat';
 
 const taskChatNarrator = (jest.requireMock('../task-chat') as any).__narrator as jest.Mock;
 
@@ -560,8 +559,7 @@ describe('finalizeFailure — stall & time-limit copy', () => {
       'thread-1',
       expect.objectContaining({ icon: 'error', label: 'Something went wrong' }),
     );
-    // …with NO FixFailureCard and NO lead-in prose beat after it.
-    expect(postFailureCard).not.toHaveBeenCalled();
+    // …with NO lead-in prose beat after it (the FixFailureCard is gone entirely).
     expect(taskChatNarrator).not.toHaveBeenCalled();
     // The row still records the honest copy for the task-detail view, and a
     // system_error stays generic — never the raw provider message.

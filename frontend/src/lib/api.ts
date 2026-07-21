@@ -341,7 +341,8 @@ export interface FixRecord {
   createdAt: string;
 }
 
-// What a failed fix tried + why it stopped, for the FixFailureCard (phase70).
+// What a failed fix tried + why it stopped — stamped on the fix row's
+// failure_details (task-detail view + logs; not rendered in the chat).
 export interface FixFailureDetails {
   category?: string;
   headline?: string;
