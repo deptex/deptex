@@ -936,11 +936,17 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     },
     deps.machineId,
   );
-  // The failure surface in a task chat is JUST a single muted "failed" step line
-  // (e.g. "Something went wrong" / "Paused — needs another run") — no card, no
-  // lead-in prose. markFailed still records the full failure_details on the row
+  // The failure surface in a task chat is JUST a single step line (e.g.
+  // "Something went wrong" / "Paused — needs another run") — no card, no lead-in
+  // prose. markFailed still records the full failure_details on the row
   // (headline/explanation/nextStep) for the task-detail view + our logs; the chat
   // itself stays minimal.
-  await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
+  //   • system_error is a genuine fault on our side → a RED line (icon 'error').
+  //   • every other stop (cancelled/budget/stall/not_fixable) is expected or
+  //     resumable → the quiet amber 'failed' line.
+  await narrateStep(deps.supabase, deps.threadId, {
+    icon: category === 'system_error' ? 'error' : 'failed',
+    label: stepLabel,
+  });
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });
 }

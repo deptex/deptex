@@ -25,8 +25,20 @@ export function TaskStepLine({
   diff?: string;
   output?: string;
 }) {
-  // A stop/failure is a quiet, muted line with a restrained amber glyph — never
-  // the aggressive red-error look.
+  // A genuine fault on our side (system_error) is the ONE terminal worth a red
+  // glyph + red text — it's not an expected/resumable stop (paused / cancelled /
+  // interrupted) but an actual break. Still just a line, never a card.
+  if (icon === 'error') {
+    return (
+      <div className="flex items-center gap-2 text-sm text-destructive">
+        <CircleAlert className="h-3.5 w-3.5 shrink-0 text-destructive" />
+        <span>{label}</span>
+      </div>
+    );
+  }
+
+  // Every other stop/failure is a quiet, muted line with a restrained amber glyph
+  // — never the aggressive red-error look.
   if (icon === 'failed') {
     return (
       <div className="flex items-center gap-2 text-sm text-foreground-secondary">

@@ -551,11 +551,13 @@ describe('finalizeFailure — stall & time-limit copy', () => {
   test('a task failure is JUST the muted step line — no failure card, no lead-in prose', async () => {
     const deps = makeDeps();
     await finalizeFailure(deps, 'system_error', 'the raw provider blew up');
-    // The whole failure surface in a task chat is one "failed" step line…
+    // The whole failure surface in a task chat is one step line… and a
+    // system_error (a genuine fault on our side) uses the RED 'error' icon,
+    // distinct from the amber 'failed' line used by resumable/expected stops.
     expect(narrateStep).toHaveBeenCalledWith(
       expect.anything(),
       'thread-1',
-      expect.objectContaining({ icon: 'failed' }),
+      expect.objectContaining({ icon: 'error', label: 'Something went wrong' }),
     );
     // …with NO FixFailureCard and NO lead-in prose beat after it.
     expect(postFailureCard).not.toHaveBeenCalled();
