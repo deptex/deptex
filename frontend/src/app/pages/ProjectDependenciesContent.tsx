@@ -4,7 +4,7 @@ import { Search, SlidersHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, Pack
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
-import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus, SupplyChainResponse } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectImportStatus, SupplyChainResponse } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import {
   DropdownMenu,
@@ -59,61 +59,6 @@ function getVulnSeverityInfo(dep: ProjectDependency): { tier: 'critical' | 'high
   const depscorePart = maxDepscore !== null ? ` · depscore ${maxDepscore.toFixed(0)}` : '';
   const label = `${total} ${total === 1 ? 'vulnerability' : 'vulnerabilities'}${depscorePart}`;
   return { tier, total, label };
-}
-
-function normalizeLicenseForComparison(license: string): string {
-  return license
-    .toLowerCase()
-    .replace(/[-_]/g, ' ')
-    .replace(/['"()]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractLicenseKey(license: string): string {
-  const normalized = normalizeLicenseForComparison(license);
-  const parts: string[] = [];
-  if (normalized.includes('0bsd') || normalized.includes('0 bsd') || normalized.includes('zero clause')) parts.push('0bsd');
-  else if (normalized.includes('bsd')) {
-    parts.push('bsd');
-    const clauseMatch = normalized.match(/(\d)\s*clause/);
-    if (clauseMatch) parts.push(clauseMatch[1] + 'clause');
-  }
-  if (normalized.includes('apache')) parts.push('apache');
-  if (normalized.includes('mit')) parts.push('mit');
-  if (normalized.includes('isc')) parts.push('isc');
-  if (normalized.includes('gpl') || normalized.includes('general public')) parts.push('gpl');
-  if (normalized.includes('agpl') || normalized.includes('affero')) parts.push('agpl');
-  if (normalized.includes('lgpl') || normalized.includes('lesser general')) parts.push('lgpl');
-  if (normalized.includes('mpl') || normalized.includes('mozilla')) parts.push('mpl');
-  if (normalized.includes('epl') || normalized.includes('eclipse')) parts.push('epl');
-  if (normalized.includes('cc0') || normalized.includes('creative commons zero')) parts.push('cc0');
-  if (normalized.includes('cc by') || normalized.includes('creative commons attribution')) parts.push('ccby');
-  if (normalized.includes('unlicense')) parts.push('unlicense');
-  if (normalized.includes('boost') || normalized.includes('bsl')) parts.push('boost');
-  if (normalized.includes('python')) parts.push('python');
-  if (!parts.includes('0bsd')) {
-    const versionMatch = normalized.match(/(\d+\.?\d*)/);
-    if (versionMatch) parts.push(versionMatch[1]);
-  }
-  return parts.join('-');
-}
-
-function checkSingleLicenseAllowed(singleLicense: string, policies: ProjectEffectivePolicies): boolean {
-  const licenseKey = extractLicenseKey(singleLicense);
-  const normalizedLicense = normalizeLicenseForComparison(singleLicense);
-  return policies.effective.accepted_licenses.some(allowed => {
-    const allowedKey = extractLicenseKey(allowed);
-    const normalizedAllowed = normalizeLicenseForComparison(allowed);
-    if (licenseKey && allowedKey && licenseKey === allowedKey) return true;
-    return normalizedLicense.includes(normalizedAllowed) || normalizedAllowed.includes(normalizedLicense);
-  });
-}
-
-function isLicenseAllowed(license: string | null, policies: ProjectEffectivePolicies | null): boolean | null {
-  if (!policies || !license || license === 'Unknown' || license === 'Pending...') return null;
-  const orParts = license.split(/\s+or\s+/i).map(part => part.replace(/[()]/g, '').trim());
-  return orParts.some(part => checkSingleLicenseAllowed(part, policies));
 }
 
 type DependencyOverviewResponse = Awaited<ReturnType<typeof api.getDependencyOverview>>;
@@ -299,7 +244,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const showListLoading = (realtime.isLoading || dependenciesLoading) && dependencies.length === 0 && !isInitialExtracting;
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [refreshingDependencies, setRefreshingDependencies] = useState(false);
-  const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
   const [importStatus, setImportStatus] = useState<ProjectImportStatus | null>(null);
   const prefetchRowTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const hasUserRefreshedRef = useRef(false);
@@ -461,10 +405,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       .finally(() => {
         if (!cancelled) setDependenciesLoading(false);
       });
-    // Load policies and import status in parallel (list already visible when deps resolve)
-    api.getProjectPolicies(organizationId, projectId)
-      .then((pols) => { if (!cancelled) setPolicies(pols ?? null); })
-      .catch((e) => { console.error('Failed to load project policies:', e); });
+    // Load import status in parallel (list already visible when deps resolve)
     api.getProjectImportStatus(organizationId, projectId)
       .then((imp) => { if (!cancelled) setImportStatus(imp ?? null); })
       .catch(() => {});
@@ -876,9 +817,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
             <ul className="space-y-0.5">
               {filteredDependencies.map((dep) => {
                 const vulnInfo = getVulnSeverityInfo(dep);
-                // Show "License" badge only when policy was evaluated and failed (allowed: false).
-                // When policy_result is null, policy hasn't run yet — don't show license issue.
-                const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
                 const isSelected = selectedDepId === dep.id;
                 return (
                   <li key={dep.id} className="transition-[height] duration-200 ease-out">
@@ -928,9 +866,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                           {dep.name}@{dep.version}
                         </TooltipContent>
                       </Tooltip>
-                      {hasLicenseIssue && (
-                        <DepTagBadge label="License" tooltip="License doesn’t match project policy" />
-                      )}
                       {dep.source === 'devDependencies' && (
                         <DepTagBadge label="Dev" tooltip="Dev dependency" />
                       )}
@@ -1030,7 +965,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                 organizationId={organizationId}
                 projectId={projectId}
                 latestVersion={panelOverview?.latest_version ?? null}
-                policies={policies}
                 isDevDependency={selectedDepFromList?.source === 'devDependencies'}
               />
               {/* Supply chain folded into the package page: version tooling + vulns + brings-in.

@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Package, Scale, Check, X } from 'lucide-react';
+import { Package, Scale } from 'lucide-react';
 import type { SupplyChainChild, ProjectEffectivePolicies } from '../../lib/api';
 
 export interface DependencyNodeData {
@@ -48,7 +48,6 @@ function DependencyNodeComponent({ data }: NodeProps) {
   const licenseBadgeClass = 'bg-foreground-secondary/10 text-foreground-secondary border-foreground-secondary/20';
   const showNotImported = nodeData.notImported === true;
   const ecosystemIcon = getEcosystemIcon(nodeData.ecosystem);
-  const showPolicyBadge = nodeData.policyAllowed !== undefined && nodeData.policyAllowed !== null;
 
   return (
     <div className="relative group">
@@ -82,17 +81,6 @@ function DependencyNodeComponent({ data }: NodeProps) {
               <span className="text-[11px] text-foreground-secondary font-mono">
                 {nodeData.version}
               </span>
-              {showPolicyBadge && (
-                <span
-                  className={nodeData.policyAllowed
-                    ? 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium border border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400'
-                    : 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium border border-destructive/30 bg-destructive/10 text-destructive'
-                  }
-                >
-                  {nodeData.policyAllowed ? <Check className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
-                  {nodeData.policyAllowed ? 'Allowed' : 'Not allowed'}
-                </span>
-              )}
             </div>
           </div>
           {/* License badge (right side) */}

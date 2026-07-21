@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
-import { ProjectDependency, ProjectEffectivePolicies, api } from '../lib/api';
+import { ProjectDependency, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 
 interface PackageOverviewProps {
@@ -24,8 +24,6 @@ interface PackageOverviewProps {
   projectId: string;
   /** Latest version from dependencies table (e.g. dist-tags.latest). When provided, used in Version card. */
   latestVersion?: string | null;
-  /** Project/org effective policies for license compliance. When provided, License card shows policy-based status. */
-  policies?: ProjectEffectivePolicies | null;
   /** When true, show a "Dev dependency" badge (package is in devDependencies, not used at runtime in production). */
   isDevDependency?: boolean;
 }
@@ -242,7 +240,7 @@ function AiSummaryRenderer({ content }: { content: string }) {
   );
 }
 
-export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, isDevDependency = false }: PackageOverviewProps) {
+export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, isDevDependency = false }: PackageOverviewProps) {
 
   const [aiSummary, setAiSummary] = useState<string | null>(dependency.ai_usage_summary ?? null);
   const [aiAnalyzedAt, setAiAnalyzedAt] = useState<string | null>(dependency.ai_usage_analyzed_at ?? null);

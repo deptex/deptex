@@ -284,7 +284,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
     const dataPromise = api.consumePrefetchedSupplyChain(orgId, projectId, dependencyId)
       ?? Promise.all([
         api.getDependencySupplyChain(orgId, projectId, dependencyId),
-        api.getProjectPolicies(orgId, projectId).catch(() => null),
+        Promise.resolve(null),
       ]);
 
     dataPromise

@@ -13,7 +13,6 @@ import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 import TaintEngineSettingsPage from "./pages/orgs/taint-engine/TaintEngineSettingsPage";
 
-import CompliancePage from "./pages/CompliancePage";
 import OrganizationOverviewPage from "./pages/OrganizationOverviewPage";
 
 import InvitePage from "./pages/InvitePage";
@@ -169,14 +168,6 @@ export const router = createBrowserRouter([
       {
         path: "settings/taint-engine",
         element: <TaintEngineSettingsPage />,
-      },
-      {
-        path: "compliance",
-        element: <CompliancePage />,
-      },
-      {
-        path: "compliance/:section",
-        element: <CompliancePage />,
       },
       {
         path: "aegis",

@@ -2,7 +2,6 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Scale,
   Bug,
   Settings,
   MessageSquare,
@@ -109,14 +108,13 @@ type NavItemDef = {
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
   { id: 'findings', label: 'Findings', path: 'findings', icon: Bug, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis', drilldown: true },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null, drilldown: true },
 ];
 
 // MVP scope cut (2026-06): top-level surfaces parked out of the sidebar. Routes/components are
 // left intact; remove an id to bring the tab back.
-const MVP_PARKED_NAV = new Set<string>(['compliance']);
+const MVP_PARKED_NAV = new Set<string>([]);
 
 export default function OrgSidebar({
   organizationId,
@@ -186,7 +184,6 @@ export default function OrgSidebar({
   const activeNavId = useMemo(() => {
     const pathParts = location.pathname.split('/');
     if (pathParts.includes('settings')) return 'settings';
-    if (pathParts.includes('compliance')) return 'compliance';
     if (pathParts.includes('findings')) return 'findings';
     if (pathParts.includes('aegis')) return 'aegis';
     return 'overview';

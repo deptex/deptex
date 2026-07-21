@@ -75,7 +75,6 @@ import { RoleDropdown } from '../../components/RoleDropdown';
 import { TeamPermissionEditor } from '../../components/TeamPermissionEditor';
 import type { NodeTypes } from '@xyflow/react';
 import { ProjectDependenciesContent, clearProjectDepsCache, warmProjectDepsCache } from './ProjectDependenciesContent';
-import { ProjectComplianceContent } from './ProjectComplianceContent';
 import { ProjectSettingsContent } from './ProjectSettingsContent';
 import {
   VulnOrgSidebarExpandedSkeleton,
@@ -4159,19 +4158,6 @@ export default function OrganizationOverviewPage() {
                     }}
                     embedInSidebar
                     onOpenFinding={handleOpenProjectFinding}
-                  />
-                )}
-                {projectSidebarTab === 'compliance' && projectSidebarProject && orgId && (
-                  <ProjectComplianceContent
-                    project={projectSidebarProject}
-                    organizationId={orgId}
-                    userPermissions={projectSidebarProject.permissions ?? null}
-                    reloadProject={async () => {
-                      if (!orgId || !selectedProjectId) return;
-                      const p = await api.getProject(orgId, selectedProjectId);
-                      setProjectSidebarProject(p);
-                    }}
-                    embedInSidebar
                   />
                 )}
                 {projectSidebarTab === 'settings' && organization && orgId && (projectSidebarProject || projectSidebarProjectLoading) && (
