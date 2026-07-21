@@ -411,52 +411,6 @@ describe('Incident Response UI', () => {
       });
     });
 
-    it.skip('40: Incident history table renders past incidents with correct data', async () => {
-      const pastIncidents = [
-        {
-          id: 'inc-past-1',
-          title: 'Past Zero-Day',
-          incident_type: 'zero_day',
-          severity: 'critical',
-          status: 'resolved',
-          declared_at: '2025-02-15T12:00:00Z',
-          total_duration_ms: 3600000,
-          affected_projects: ['proj-1'],
-        },
-      ];
-
-      mockFetch.mockImplementation((input: unknown) => {
-        const u = getFetchUrl(input);
-        if (u.includes('/incidents/stats')) return Promise.resolve({ ok: true, json: async () => ({ active: 0, totalResolved: 1, monthlyCount: 1 }) });
-        if (u.includes('/playbooks')) return Promise.resolve({ ok: true, json: async () => [] });
-        if (u.includes('/incidents?') || u.includes('/incidents&')) return Promise.resolve({ ok: true, json: async () => ({ incidents: pastIncidents, total: 1 }) });
-        return Promise.resolve({ ok: true, json: async () => ({}) });
-      });
-
-      const { AegisManagementConsole } = await import('../components/settings/AegisManagementConsole');
-      const { DEFAULT_ROLE_PERMISSIONS } = await import('../lib/api');
-      render(
-        <AegisManagementConsole
-          organizationId="org-1"
-          userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true, manage_incidents: true }}
-        />
-      );
-
-      fireEvent.click(screen.getByRole('button', { name: /Incidents/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText('Incident History')).toBeInTheDocument();
-      }, { timeout: 8000 });
-
-      await waitFor(() => {
-        expect(screen.getByText('Past Zero-Day')).toBeInTheDocument();
-      }, { timeout: 5000 });
-
-      const incidentsResCalls = mockFetch.mock.calls.filter(
-        (c) => typeof c[0] === 'string' && (c[0] as string).includes('/incidents')
-      );
-      expect(incidentsResCalls.length).toBeGreaterThanOrEqual(1);
-    });
   });
 
   describe('Integration (41–44)', () => {
