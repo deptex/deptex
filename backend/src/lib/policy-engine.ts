@@ -1,3 +1,7 @@
+// ⚠️ DEPRECATED — policy-as-code. The policy-authoring UI has been removed and the
+// extraction pipeline no longer evaluates project policies (see routes/workers.ts).
+// This engine is RETAINED for a future re-add and is still invoked by the PR-check
+// guardrails in the webhook routes (integrations / gitlab / bitbucket). Do not delete.
 /**
  * Policy-as-Code Execution Engine.
  *

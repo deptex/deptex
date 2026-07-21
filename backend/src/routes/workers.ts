@@ -1857,22 +1857,26 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Run policy evaluation after populate completes
+    // Finalize the populate: recompute the overview summary, flip status to
+    // 'ready', compute the health score, and invalidate caches.
+    // ⚠️ DEPRECATED (policy-as-code): the extraction pipeline no longer evaluates
+    // project policies. The eval + status_changed/policy_violation emits are gated
+    // off below (kept for a future re-add — flip POLICY_ENABLED). See lib/policy-engine.ts.
     if (projectId && organizationId && successful > 0) {
       try {
-        const { evaluateProjectPolicies } = await import('../lib/policy-engine');
-        console.log(`[Policy] Evaluating policies for project ${projectId} after populate...`);
-        const evalResult = await evaluateProjectPolicies(projectId, organizationId);
-        console.log(`[Policy] Project ${projectId}: status=${evalResult.statusName}, deps evaluated=${evalResult.depResults}, violations=${evalResult.violations.length}`);
-
-        try {
+        const POLICY_ENABLED: boolean = false; // ⚠️ DEPRECATED — flip to re-enable policy eval
+        if (POLICY_ENABLED) {
+          const { evaluateProjectPolicies } = await import('../lib/policy-engine');
+          console.log(`[Policy] Evaluating policies for project ${projectId} after populate...`);
+          const evalResult = await evaluateProjectPolicies(projectId, organizationId);
+          console.log(`[Policy] Project ${projectId}: status=${evalResult.statusName}, deps evaluated=${evalResult.depResults}, violations=${evalResult.violations.length}`);
           if (evalResult.statusName) {
             await emitEvent({ type: 'status_changed', organizationId, projectId, payload: { statusName: evalResult.statusName, violationCount: evalResult.violations.length }, source: 'extraction-pipeline', priority: 'normal' });
           }
           if (evalResult.violations.length > 0) {
             await emitEvent({ type: 'policy_violation', organizationId, projectId, payload: { violations: evalResult.violations.slice(0, 50) }, source: 'extraction-pipeline', priority: 'high' });
           }
-        } catch (e) {}
+        }
 
         // Recompute the denormalized overview summary BEFORE flipping status to
         // 'ready'. The 'ready' write below is what fires the project_repositories
@@ -1903,8 +1907,8 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         const { invalidateCache } = await import('../lib/cache');
         await invalidateCache(`project-stats:${projectId}`).catch(() => {});
         await invalidateCache(`org-stats:${organizationId}`).catch(() => {});
-      } catch (policyErr: any) {
-        console.error(`[Policy] Failed to evaluate policies for project ${projectId}:`, policyErr?.message);
+      } catch (finalizeErr: any) {
+        console.error(`[Populate] Failed to finalize project ${projectId}:`, finalizeErr?.message);
       }
     }
 

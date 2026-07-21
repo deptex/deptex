@@ -1,4 +1,7 @@
 // @ts-nocheck
+// ⚠️ DEPRECATED — policy-as-code. The policy-authoring UI has been removed. These
+// Aegis task-agent tools (list/get/update/generate policy code) remain registered
+// but manage a retired feature. Retained for a future re-add.
 import { tool } from 'ai';
 import { z } from 'zod';
 import { registerAegisTool } from './registry';

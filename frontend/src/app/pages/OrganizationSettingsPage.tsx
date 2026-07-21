@@ -30,9 +30,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { UserCircle, FileText, Globe, Network } from 'lucide-react';
 import MembersPage from './MembersSection';
 import AuditLogsSection from './AuditLogsSection';
-import PoliciesPage from './PoliciesPage';
-import StatusesSection from '@/components/StatusesSection';
-import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
 import AISpendingSection from '../../components/settings/AISpendingSection';
@@ -401,51 +398,6 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      );
-    case 'policies':
-      return (
-        <div className="space-y-6 h-full">
-          <div className="mb-6 flex items-start justify-between">
-            <div>
-              <div className={`h-8 w-24 ${pulse}`} />
-            </div>
-            <div className="flex items-center gap-2">
-              <div className={`h-9 w-20 ${pulse} rounded-md`} />
-              <div className={`h-9 w-14 ${pulse} rounded-md`} />
-            </div>
-          </div>
-          <div className="flex items-center border-b border-border pb-px">
-            <div className="flex items-center gap-6">
-              <div className={`h-4 w-12 ${pulse} pb-3`} />
-              <div className={`h-4 w-32 ${pulse} pb-3`} />
-            </div>
-          </div>
-          <div className="space-y-6 pt-2">
-            {[0, 1].map((i) => (
-              <div key={i} className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-                  <div className={`h-3.5 w-32 ${pulse} rounded`} />
-                </div>
-                <div
-                  className="px-4 py-3 font-mono text-[13px] leading-6"
-                  style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}
-                >
-                  <div className="space-y-1.5 animate-pulse">
-                    <div className="h-3 bg-white/10 rounded w-[70%]" />
-                    <div className="h-3 bg-white/10 rounded w-[55%] ml-4" />
-                    <div className="h-3 bg-white/10 rounded w-[80%] ml-4" />
-                    <div className="h-3 bg-white/10 rounded w-[40%] ml-8" />
-                    <div className="h-3 bg-white/10 rounded w-[60%] ml-4" />
-                    <div className="h-3 bg-white/10 rounded w-[30%]" />
-                    <div className="h-3" />
-                    <div className="h-3 bg-white/10 rounded w-[50%] ml-4" />
-                    <div className="h-3 bg-white/10 rounded w-[45%] ml-4" />
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       );
@@ -1531,8 +1483,6 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
-  const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
-  const [hasVisitedStatuses, setHasVisitedStatuses] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRoleColor, setNewRoleColor] = useState(''); // No default color (plain gray)
@@ -1677,7 +1627,6 @@ export default function OrganizationSettingsPage() {
     manage_integrations: true,
     manage_notifications: true,
   } : (basePermissions ? { ...basePermissions, interact_with_aegis: basePermissions.interact_with_aegis ?? false } : null);
-  const canManageCompliance = effectivePermissions?.manage_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.view_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.edit_policies;
 
   // Any org member can open Settings; individual sections are gated by their permissions (sidebar + redirects)
   useEffect(() => {
@@ -1692,13 +1641,6 @@ export default function OrganizationSettingsPage() {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
     }
   }, [id, sectionParam, navigate]);
-
-  // Redirect away from policies when user lacks manage_compliance
-  useEffect(() => {
-    if (id && sectionParam === 'policies' && permissionsChecked && !canManageCompliance) {
-      navigate(`/organizations/${id}/settings/general`, { replace: true });
-    }
-  }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
 
   // Redirect away from security sections when user lacks manage_security
   const securitySections = ['sso', 'mfa', 'ip_allowlist'];
@@ -1848,12 +1790,10 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  // Track when user visits Members/Integrations/Policies/Statuses tabs so we can keep them mounted (cached) when switching away
+  // Track when user visits Members/Integrations tabs so we can keep them mounted (cached) when switching away
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
-    if (activeSection === 'policies') setHasVisitedPolicies(true);
-    if (activeSection === 'statuses') setHasVisitedStatuses(true);
   }, [activeSection]);
 
   const loadUsage = async () => {
@@ -3786,19 +3726,6 @@ export default function OrganizationSettingsPage() {
               )}
 
 
-
-              {/* Keep Policies mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
-              {(activeSection === 'policies' || hasVisitedPolicies) && (
-                <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
-                  <PoliciesPage isSettingsSubpage={true} />
-                </div>
-              )}
-
-              {(activeSection === 'statuses' || hasVisitedStatuses) && (
-                <div style={{ display: activeSection === 'statuses' ? undefined : 'none' }}>
-                  <StatusesSection />
-                </div>
-              )}
 
               {activeSection === 'security_slas' && id && (
                 <div className="pt-8">

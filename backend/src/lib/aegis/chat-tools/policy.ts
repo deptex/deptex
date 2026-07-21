@@ -1,3 +1,5 @@
+// ⚠️ DEPRECATED — policy-as-code. The policy-authoring UI has been removed. This
+// read-only Aegis chat tool (list_policies) summarizes a retired feature. Retained.
 import { jsonSchema } from 'ai';
 import type { AegisToolEntry } from '../tool-types';
 

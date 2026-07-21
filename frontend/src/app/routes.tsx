@@ -13,7 +13,6 @@ import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 import TaintEngineSettingsPage from "./pages/orgs/taint-engine/TaintEngineSettingsPage";
 
-import PoliciesPage from "./pages/PoliciesPage";
 import CompliancePage from "./pages/CompliancePage";
 import OrganizationOverviewPage from "./pages/OrganizationOverviewPage";
 
@@ -170,10 +169,6 @@ export const router = createBrowserRouter([
       {
         path: "settings/taint-engine",
         element: <TaintEngineSettingsPage />,
-      },
-      {
-        path: "policies",
-        element: <PoliciesPage />,
       },
       {
         path: "compliance",

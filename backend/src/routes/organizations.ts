@@ -2332,6 +2332,10 @@ router.delete('/:id/roles/:roleId', async (req: AuthRequest, res) => {
   }
 });
 
+// ⚠️ DEPRECATED — policy-as-code (authoring UI removed; the policy / statuses /
+// policy-code / policy-change routes below are no longer reachable from the app).
+// Retained for a future re-add. See lib/policy-engine.ts. (The security_slas routes
+// are a separate, live feature.)
 // GET /api/organizations/:id/policies - Get organization policies (policy as code + backward-compat shape)
 router.get('/:id/policies', async (req: AuthRequest, res) => {
   try {

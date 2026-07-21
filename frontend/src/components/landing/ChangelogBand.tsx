@@ -44,7 +44,6 @@ const CHANGELOG_HEADER =
  */
 const DOC_LINKS = [
   { label: "Quickstart → first scan", to: "/docs/quick-start" },
-  { label: "Policy-as-code reference", to: "/docs/policies" },
 ];
 
 export default function ChangelogBand() {

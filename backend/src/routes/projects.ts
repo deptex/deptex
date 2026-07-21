@@ -2727,6 +2727,9 @@ router.delete('/:id/projects/:projectId/members/:memberId', async (req: AuthRequ
   }
 });
 
+// ⚠️ DEPRECATED — policy-as-code (authoring UI removed; the policy / policy-exception /
+// policy-change routes below are no longer reachable from the app). Retained for a
+// future re-add. See lib/policy-engine.ts.
 // GET /api/organizations/:id/projects/:projectId/policies - Get effective policies for a project
 router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) => {
   try {
@@ -8636,6 +8639,9 @@ import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../
 import { checkRateLimit } from '../lib/rate-limit';
 import { enrichPackageForPreflight } from './workers';
 
+// ⚠️ DEPRECATED — policy-as-code (authoring UI removed; the evaluate/validate/preflight/
+// policy-change/exception routes below are unreachable from the app). Retained. See
+// lib/policy-engine.ts.
 // POST /api/organizations/:id/projects/:projectId/evaluate-policy
 router.post('/:id/projects/:projectId/evaluate-policy', async (req: AuthRequest, res) => {
   try {

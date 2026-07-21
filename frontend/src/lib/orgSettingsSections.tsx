@@ -6,8 +6,6 @@ import {
   Atom,
   Network,
   Plug,
-  Shield,
-  Tag,
   Clock,
   FileText,
   LogIn,
@@ -26,8 +24,6 @@ const ALL_SETTINGS_SECTIONS = [
   'ai',
   'reachability',
   'integrations',
-  'policies',
-  'statuses',
   'security_slas',
   'malicious_allowlist',
   'audit_logs',
@@ -43,8 +39,6 @@ const ALL_SETTINGS_SECTIONS = [
 // and routes are left intact; remove an id from this set to bring a section back.
 export const MVP_PARKED_SECTIONS = new Set<string>([
   'reachability',
-  'policies',
-  'statuses',
   'security_slas',
   'malicious_allowlist',
   'audit_logs',
@@ -148,8 +142,6 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'reachability', label: 'Reachability', icon: <Network className={iconClass} /> });
   }
   if (canCompliance) {
-    entries.push({ id: 'policies', label: 'Policies', icon: <Shield className={iconClass} /> });
-    entries.push({ id: 'statuses', label: 'Statuses', icon: <Tag className={iconClass} /> });
     entries.push({ id: 'security_slas', label: 'Security SLAs', icon: <Clock className={iconClass} /> });
   }
   if (perms.manage_organization_settings) {

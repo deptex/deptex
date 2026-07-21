@@ -1,3 +1,5 @@
+// ⚠️ DEPRECATED — policy-as-code. The authoring UI has been removed; these defaults
+// still seed new organizations' policy code. Retained for a future re-add.
 /**
  * Default policy templates and seed data for the Policy-as-Code Engine.
  * Used when creating new organizations and for fallback values.
