@@ -1,6 +1,5 @@
 // ⚠️ DEPRECATED — policy-as-code authoring UI has been removed. These helpers are
-// NOT dormant: they still power license compliance (routes/projects) and the PR
-// guardrails (routes/integrations + gitlab/bitbucket webhooks). Retained.
+// NOT dormant: they still power license compliance (routes/projects). Retained.
 /**
  * Project policy helpers (effective licenses, license allowed check).
  * Shared by routes/projects and routes/integrations (PR guardrails).

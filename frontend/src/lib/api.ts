@@ -3164,22 +3164,6 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/policy-exceptions/${exceptionId}`, { method: 'DELETE' });
   },
 
-  // Project PR Guardrails
-  async getProjectPRGuardrails(organizationId: string, projectId: string): Promise<ProjectPRGuardrails> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/pr-guardrails`);
-  },
-
-  async updateProjectPRGuardrails(
-    organizationId: string,
-    projectId: string,
-    data: Partial<Omit<ProjectPRGuardrails, 'id' | 'project_id' | 'created_at' | 'updated_at'>>
-  ): Promise<ProjectPRGuardrails> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/pr-guardrails`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
   async createRemoveDependencyPR(
     organizationId: string,
     projectId: string,
@@ -5064,19 +5048,6 @@ export interface ProjectEffectivePolicies {
   effective_pr_check_code?: string;
   /** True when the current user has org permission (owner/admin or manage_compliance); policy change requests will be auto-accepted. */
   request_will_auto_accept?: boolean;
-}
-
-export interface ProjectPRGuardrails {
-  id?: string;
-  project_id: string;
-  block_critical_vulns: boolean;
-  block_high_vulns: boolean;
-  block_medium_vulns: boolean;
-  block_low_vulns: boolean;
-  block_policy_violations: boolean;
-  block_transitive_vulns: boolean;
-  created_at?: string;
-  updated_at?: string;
 }
 
 // Registry search types
