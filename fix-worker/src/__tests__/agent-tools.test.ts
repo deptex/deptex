@@ -524,7 +524,7 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     expect(JSON.stringify(details)).not.toMatch(/budget|ran out of room/i);
   });
 
-  test('the 30-min timeout is a calm gray "Aegis got tired" line that invites a reply-to-resume', async () => {
+  test('the 30-min timeout is a calm gray "Aegis got too tired" line that invites a reply-to-resume', async () => {
     const deps = makeDeps();
     await finalizeFailure(deps, 'budget_exhausted', 'Reached the time budget before finishing.');
     expect(markFailed).toHaveBeenCalledWith(
@@ -533,7 +533,7 @@ describe('finalizeFailure — stall & time-limit copy', () => {
       expect.any(String),
       'budget_exhausted',
       expect.objectContaining({
-        headline: 'Aegis got tired',
+        headline: 'Aegis got too tired',
         nextStep: expect.stringContaining("Reply and I'll pick it right back up"),
       }),
       'me',
@@ -541,7 +541,7 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     // Gray 'tired' icon (not amber 'failed', not red 'error') — a calm, resumable stop.
     expect(narrateStep).toHaveBeenCalledWith(expect.anything(), 'thread-1', {
       icon: 'tired',
-      label: 'Aegis got tired',
+      label: 'Aegis got too tired',
     });
     // The USER-FACING copy must not sound like money ('budget'); the internal
     // category key ('budget_exhausted') is DB-only and never rendered.

@@ -2,8 +2,8 @@
  * Aegis fix-recovery — dev harness for the machine-crash path.
  *
  * Mirrors POST /api/internal/recovery/fix-jobs' terminal path: requeue stuck
- * jobs, fail exhausted ones, and post the honest "Run interrupted" beat to each
- * crashed agent task's chat. Drives the real RPCs + postCrashFailureToChat.
+ * jobs, fail exhausted ones, and post the honest "Something went wrong" beat to
+ * each crashed agent task's chat. Drives the real RPCs + postCrashFailureToChat.
  *
  *   npx tsx scripts/recover-fix-jobs.ts
  */

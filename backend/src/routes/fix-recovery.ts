@@ -19,16 +19,17 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
 }
 
 /**
- * Post an honest machine-crash failure to a task chat. The chat surface is JUST
- * a single muted "failed" step line (matching the worker's finalizeFailure
- * minimalism — no lead-in prose, no card); the full copy is stamped on the row's
- * failure_details for the task-detail view + logs.
+ * Post an honest machine-crash failure to a task chat. A machine crash is a
+ * genuine fault on OUR side (the box died mid-run) — the same class as the
+ * worker's system_error — so the chat surface is the RED "Something went wrong"
+ * step line (icon 'error'), one line, no card. The machine-specific copy is
+ * stamped on the row's failure_details for the task-detail view + logs.
  */
 export async function postCrashFailureToChat(
   supabase: typeof getSupabaseClient,
   job: { id: string; thread_id: string },
 ): Promise<void> {
-  const headline = 'The run stopped unexpectedly';
+  const headline = 'Something went wrong';
   const explanation =
     'The machine running this task stopped before it could finish — this is on my side, not a problem with your code.';
   const nextStep = "Reply and I'll pick it up again from where I left off.";
@@ -41,8 +42,10 @@ export async function postCrashFailureToChat(
   await supabase.from('aegis_chat_messages').insert({
     thread_id: job.thread_id,
     role: 'assistant',
-    content: 'Run interrupted',
-    metadata: { parts: [{ type: 'step', icon: 'failed', label: 'Run interrupted', status: 'done' }] },
+    content: 'Something went wrong',
+    metadata: {
+      parts: [{ type: 'step', icon: 'error', label: 'Something went wrong', status: 'done' }],
+    },
   });
 }
 

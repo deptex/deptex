@@ -897,10 +897,10 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     // no longer a stop — a long run compacts & continues, see loop.ts). Light,
     // personified copy; NEVER the word "budget" (a paying user reads that as
     // their prepaid balance). nextStep invites reply-to-resume.
-    headline = 'Aegis got tired';
+    headline = 'Aegis got too tired';
     explanation = 'This run hit its time limit before finishing, so I stopped to catch my breath.';
     leadIn = "I've been at this a while — stopping here to catch my breath.";
-    stepLabel = 'Aegis got tired';
+    stepLabel = 'Aegis got too tired';
     nextStep = "Reply and I'll pick it right back up from where I left off.";
   } else if (category === 'context_exhausted') {
     // The run filled the model's context window. Recoverable via the dedicated
