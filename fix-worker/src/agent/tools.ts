@@ -893,14 +893,15 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     stepLabel = 'Stopped — no clear fix found';
     nextStep = "Reply with a hint (a file, a version, an approach) and I'll pick this up again.";
   } else if (category === 'budget_exhausted') {
-    // A single run's budget ran out — either the wall-clock time limit OR the
-    // step cap (both are "more than one run allows"). Wording rule: never
-    // "budget" (money collision); nextStep invites reply-to-resume.
-    headline = 'This needs another run to finish';
-    explanation = 'The task ran longer than a single pass allows, so I stopped where I was.';
-    leadIn = "I've done as much as one run allows — here's where I got to.";
-    stepLabel = 'Paused — needs another run';
-    nextStep = "Reply and I'll pick it up again from where I left off.";
+    // A single run hit its 30-min time limit before finishing (the step cap is
+    // no longer a stop — a long run compacts & continues, see loop.ts). Light,
+    // personified copy; NEVER the word "budget" (a paying user reads that as
+    // their prepaid balance). nextStep invites reply-to-resume.
+    headline = 'Aegis got tired';
+    explanation = 'This run hit its time limit before finishing, so I stopped to catch my breath.';
+    leadIn = "I've been at this a while — stopping here to catch my breath.";
+    stepLabel = 'Aegis got tired';
+    nextStep = "Reply and I'll pick it right back up from where I left off.";
   } else if (category === 'context_exhausted') {
     // The run filled the model's context window. Recoverable via the dedicated
     // "Compact context" action on the card, which wakes a resume that rebuilds a
@@ -942,10 +943,12 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
   // (headline/explanation/nextStep) for the task-detail view + our logs; the chat
   // itself stays minimal.
   //   • system_error is a genuine fault on our side → a RED line (icon 'error').
-  //   • every other stop (cancelled/budget/stall/not_fixable) is expected or
-  //     resumable → the quiet amber 'failed' line.
+  //   • budget_exhausted ("Aegis got tired", the 30-min timeout) is a calm,
+  //     expected, resume-on-reply stop → a GRAY line (icon 'tired').
+  //   • everything else (stall / not_fixable / machine_crash) → the amber 'failed'.
   await narrateStep(deps.supabase, deps.threadId, {
-    icon: category === 'system_error' ? 'error' : 'failed',
+    icon:
+      category === 'system_error' ? 'error' : category === 'budget_exhausted' ? 'tired' : 'failed',
     label: stepLabel,
   });
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });

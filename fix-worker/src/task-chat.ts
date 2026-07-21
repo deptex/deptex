@@ -63,7 +63,7 @@ export type Narrator = (text: string) => Promise<void>;
 // A discrete tool-use step the chat renders as a gray icon + label line (past
 // tense — the action is done), distinct from the first-person prose beats. The
 // `icon` is a semantic key the frontend maps to a lucide glyph.
-export type StepIcon = 'clone' | 'explore' | 'read' | 'search' | 'edit' | 'verify' | 'pr' | 'compact' | 'failed' | 'error';
+export type StepIcon = 'clone' | 'explore' | 'read' | 'search' | 'edit' | 'verify' | 'pr' | 'compact' | 'failed' | 'error' | 'tired';
 export interface TaskStep {
   icon: StepIcon;
   label: string;

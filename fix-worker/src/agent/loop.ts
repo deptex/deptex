@@ -462,8 +462,22 @@ export async function runTaskAgent(
         lastPassSteps = 0; // the next pass starts fresh; don't misread as a step cap
         continue;
       }
-      if (filledContext) compactionsExhausted = true; // filled but out of compactions
-      break; // natural stop / step cap / compactions exhausted
+      if (filledContext) {
+        compactionsExhausted = true; // filled but out of compactions
+        break;
+      }
+      // The per-pass step cap is NO LONGER a task terminal. A pass that used all
+      // MAX_STEPS without finishing, overflowing, or stalling is a genuinely long
+      // fix, not a spin (the stall detector catches real spinning; a Stop and the
+      // 30-min wall clock are the user-facing ceilings). Keep going — start another
+      // pass on the accumulated history; context growth still triggers the
+      // compaction path above. Count it against MAX_COMPACTIONS as a hard backstop
+      // so a pathological loop still ends (→ budget_exhausted, "Aegis got tired").
+      if (lastPassSteps >= MAX_STEPS && compactions < MAX_COMPACTIONS) {
+        compactions++;
+        continue;
+      }
+      break; // the model ended on its own before the cap, or out of continuations
     }
   } catch (e: any) {
     // An abort is expected (cancel / wall-clock / stall); anything else is a real error.

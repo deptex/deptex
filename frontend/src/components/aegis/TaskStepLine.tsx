@@ -1,4 +1,4 @@
-import { FilePen, CircleAlert } from 'lucide-react';
+import { FilePen, CircleAlert, Moon } from 'lucide-react';
 import { FileDiffCard } from './FileDiffCard';
 import { TerminalCard } from './TerminalCard';
 
@@ -32,6 +32,17 @@ export function TaskStepLine({
     return (
       <div className="flex items-center gap-2 text-sm text-destructive">
         <CircleAlert className="h-3.5 w-3.5 shrink-0 text-destructive" />
+        <span>{label}</span>
+      </div>
+    );
+  }
+
+  // The 30-min timeout ("Aegis got tired") is the calmest terminal — an expected,
+  // resume-on-reply stop, not a failure. Fully gray (glyph + text), a sleepy Moon.
+  if (icon === 'tired') {
+    return (
+      <div className="flex items-center gap-2 text-sm text-foreground-secondary">
+        <Moon className="h-3.5 w-3.5 shrink-0 text-foreground-secondary" />
         <span>{label}</span>
       </div>
     );
