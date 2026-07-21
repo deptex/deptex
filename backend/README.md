@@ -1,6 +1,6 @@
 # Deptex Backend
 
-The core API for **Deptex** — an AI-powered, open-core dependency-security platform: dependency intelligence, continuous supply-chain monitoring, policy-as-code, and the **Aegis** AI security agent.
+The core API for **Deptex** — an AI-powered, open-source dependency-security platform: dependency intelligence, continuous supply-chain monitoring, vulnerability reachability, and the **Aegis** AI security agent.
 
 Open source under **AGPL-3.0** — see [`LICENSE`](../LICENSE). Contributions are accepted under the CLA described in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
@@ -132,7 +132,7 @@ scripts/          migrate.ts + ops/e2e scripts
 
 **Request lifecycle:** `Authorization: Bearer <jwt>` → `authenticateUser` resolves `req.user` → route handler → Supabase (service-role) for data, with RBAC checked by **permission key, never role name** → long-running work handed off to QStash and the Fly.io workers. Internal worker/cron endpoints (`/api/internal/*`, `/api/workers`) skip user auth and are guarded by `INTERNAL_API_KEY` or QStash signatures instead.
 
-Main mount prefixes: `/api/organizations` (the bulk of tenant features), `/api/projects` (DAST), `/api/aegis`, `/api/integrations`, `/api/workers`, `/api/internal/*`, `/api/stripe/webhooks`, plus the auth / user / admin surfaces. The deep architecture is in [`CLAUDE.md`](../CLAUDE.md).
+Main mount prefixes: `/api/organizations` (most tenant features — projects, teams, findings, billing…), `/api/projects` (DAST — dynamic application security scans), `/api/aegis`, `/api/integrations`, `/api/workers`, `/api/internal/*`, `/api/stripe/webhooks`, plus the auth / user / admin surfaces. The deep architecture is in [`CLAUDE.md`](../CLAUDE.md).
 
 ## Authentication
 
