@@ -358,7 +358,7 @@ export async function loadPdvsForProject(
 
   const pdIds = projectDeps.map((p) => p.id);
   const { data: pdvData, error: pdvError } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('id, project_dependency_id, osv_id, severity')
     .in('project_dependency_id', pdIds);
   if (pdvError || !pdvData) {

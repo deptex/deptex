@@ -135,6 +135,23 @@ jobs:
         working-directory: depscanner
         run: npm run test:taint-engine-all
 
+      # Entry-point auth classification (the CI classification lock, SC-4):
+      # the per-framework route-auth + handler-span suites across all 8
+      # languages plus the shared evidence/join core. Tsx-driven (tree-sitter
+      # WASM) — chained so a regression in any detector's classification fails
+      # the depscanner job.
+      - name: Run framework-detector auth suites
+        working-directory: depscanner
+        run: npm run test:framework-detectors
+
+      # Entry-point auth end-to-end: real extractUsage → buildEntryPointAuthMap →
+      # runEngineCore → computeEntryPointTag span-join → aggregateEpdFromFlows over
+      # the express fixture. The only test that gates the full wiring (a real flow's
+      # source line actually landing inside a captured handler span). No VDB/Docker.
+      - name: Run entry-point auth e2e
+        working-directory: depscanner
+        run: npm run e2e:entry-point-auth
+
       # Snapshot-runner meta-test: exercises the bootstrap path, diff
       # detection, ignore-list, and arg parser against synthetic dirs.
       # No Docker required — runs in <1s.

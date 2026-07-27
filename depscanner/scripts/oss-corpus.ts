@@ -248,22 +248,29 @@ function execCapture(
         // child — `docker run -i` survives parent-stdin EOF if the
         // container process is mid-syscall (which cdxgen `--profile
         // research --deep` always is, doing remote git ls-remote calls).
-        // Sweep all running deptex-cli:local containers as a hammer; this
+        // Sweep all running containers of the SCAN IMAGE as a hammer; this
         // is acceptable for the corpus harness because we never run the
-        // harness alongside a "real" scan.
+        // harness alongside a "real" scan. The filter follows
+        // DEPTEX_CLI_IMAGE — a hardcoded deptex-cli:local left selfimprove-
+        // tagged runs unswept (zombie containers kept scanning after the
+        // harness timed out).
         try {
-          require('node:child_process').execSync(
-            'docker ps -q --filter ancestor=deptex-cli:local',
-            { encoding: 'utf8' },
-          )
+          // execFileSync (argv, no shell): DEPTEX_CLI_IMAGE flows straight into
+          // an argument, never a shell string — JSON.stringify is NOT shell
+          // escaping (it leaves `$(...)`/backticks intact, which sh would
+          // command-substitute inside double quotes). A config/CI-sourced image
+          // name must not be an injection primitive.
+          const { execFileSync } = require('node:child_process');
+          const sweepImage = process.env.DEPTEX_CLI_IMAGE || 'deptex-cli:local';
+          execFileSync('docker', ['ps', '-q', '--filter', `ancestor=${sweepImage}`], {
+            encoding: 'utf8',
+          })
             .split('\n')
             .map((s: string) => s.trim())
             .filter(Boolean)
             .forEach((id: string) => {
               try {
-                require('node:child_process').execSync(`docker kill ${id}`, {
-                  stdio: 'ignore',
-                });
+                execFileSync('docker', ['kill', id], { stdio: 'ignore' });
               } catch {
                 /* container already gone */
               }

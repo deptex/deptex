@@ -4,14 +4,14 @@ import { supabase } from '../../supabase';
 export function getReachabilityFlowsTool(ctx: { organizationId: string }) {
   return dynamicTool({
     description:
-      'Return reachability flow paths (entry point → sink) for a vulnerability. Input is a project_dependency_vulnerabilities.id. Each flow has an entry point file/method/line, a sink file/method/line, and a chain of nodes.',
+      'Return reachability flow paths (entry point → sink) for a vulnerability. Input is a project_dependency_findings.id. Each flow has an entry point file/method/line, a sink file/method/line, and a chain of nodes.',
     inputSchema: jsonSchema({
       type: 'object',
       properties: {
         vulnerabilityId: {
           type: 'string',
           format: 'uuid',
-          description: 'project_dependency_vulnerabilities.id (from get_project_vulnerabilities).',
+          description: 'project_dependency_findings.id (from get_project_vulnerabilities).',
         },
       },
       required: ['vulnerabilityId'],
@@ -21,7 +21,7 @@ export function getReachabilityFlowsTool(ctx: { organizationId: string }) {
       const { vulnerabilityId } = input as { vulnerabilityId: string };
 
       const { data: vuln } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('id, project_id, osv_id, reachability_level, reachability_details, project_dependency_id')
         .eq('id', vulnerabilityId)
         .single();

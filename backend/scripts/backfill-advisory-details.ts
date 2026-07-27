@@ -50,7 +50,7 @@ async function fetchFindingCves(): Promise<Map<string, string>> {
   const byOsv = new Map<string, string>();
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, project_dependencies!inner(dependency_id)')
       .range(from, from + PAGE - 1);
     if (error) throw error;

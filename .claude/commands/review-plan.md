@@ -20,8 +20,8 @@ For a high-stakes first-pass review, opt back into the heavy version with `--dee
 
 Parse arguments from the user's message:
 
-- `/review-plan` — review the most recently modified `.cursor/plans/*.plan.md` (excluding `archive/`); 6 personas, no debate.
-- `/review-plan <plan-slug-or-path>` — review a specific plan, e.g. `/review-plan dast` or `/review-plan .cursor/plans/dast.plan.md`.
+- `/review-plan` — review the most recently modified `.claude/plans/*.plan.md` (excluding `archive/`); 6 personas, no debate.
+- `/review-plan <plan-slug-or-path>` — review a specific plan, e.g. `/review-plan dast` or `/review-plan .claude/plans/dast.plan.md`.
 - `/review-plan <plan> <N>` — force N persona agents (clamped [5, 30]).
 - `/review-plan <plan> --deep` — full original behavior: planner picks 8-12 personas, debate enabled, full envelopes. Use for first-pass review of a complex plan.
 - `/review-plan <plan> --debate` — enable debate (Round 2) without expanding the persona set.
@@ -35,13 +35,13 @@ If no plan is found, stop and tell the user to run `/plan-feature` first.
 
 ## Phase 0 — Plan Resolution & Context Gathering
 
-1. Locate the plan file. If a slug/path was passed, resolve it (try `.cursor/plans/<slug>.plan.md` first, then `.cursor/plans/<slug>.md`, then literal path). If no arg, find the most-recently-modified `*.plan.md` in `.cursor/plans/` (excluding `archive/`).
+1. Locate the plan file. If a slug/path was passed, resolve it (try `.claude/plans/<slug>.plan.md` first, then `.claude/plans/<slug>.md`, then literal path). If no arg, find the most-recently-modified `*.plan.md` in `.claude/plans/` (excluding `archive/`).
 2. Read the full plan.
 3. Read CLAUDE.md for architecture context.
-4. Read `.cursor/plans/deptex_projects_roadmap_index.plan.md` ONLY if the plan claims a roadmap position; skip otherwise.
+4. Read `.claude/plans/deptex_projects_roadmap_index.plan.md` ONLY if the plan claims a roadmap position; skip otherwise.
 5. Scan `MEMORY.md` (the index, not individual entries) for any active worktree memos overlapping this plan's area. If none, note "no overlap".
-6. If the plan references a feature brief (`.cursor/plans/feature-brief-*.md`), read it.
-7. If the plan references a research doc (`.cursor/plans/research-*.md`), read it.
+6. If the plan references a feature brief (`.claude/plans/feature-brief-*.md`), read it.
+7. If the plan references a research doc (`.claude/plans/research-*.md`), read it.
 8. Build a **plan dossier** (kept in working memory, passed into every agent):
    - Plan file path + slug
    - Overview (1-paragraph from plan)
@@ -284,7 +284,7 @@ Group findings by `axis` so the user can see thematic concentrations.
 
 ## Phase 6 — Report
 
-Write the report to `.cursor/plans/review-{plan-slug}.md`.
+Write the report to `.claude/plans/review-{plan-slug}.md`.
 
 Print a **verdict line** to the user:
 - `Verdict: READY (no P0/P1) — proceed to /explain-plan, then /implement`
@@ -296,7 +296,7 @@ Report structure:
 ```markdown
 # Plan Review — {plan slug}
 Verdict: **<READY | REVISE | REWORK>**
-Plan reviewed: `.cursor/plans/{plan-file}` (mtime <UTC>)
+Plan reviewed: `.claude/plans/{plan-file}` (mtime <UTC>)
 Generated: <UTC>
 Mode: <lean | deep | custom>; debate: <on | off>
 Personas: <N> — <comma-separated ids>
@@ -396,7 +396,7 @@ Grouped by concern. Each persona has an ID and a lens.
 ### Frontend & UX (deep mode)
 
 - **ux-walker** — Walk the user flow as a first-time user. Entry / loaded / empty / error states all specified for every page?
-- **design-coherence-auditor** — Plan reference `.cursor/skills/frontend-design/SKILL.md`? Propose new design tokens or one-off colors (red flag)? Layout choices justified vs existing pages?
+- **design-coherence-auditor** — Plan reference `.claude/skills/frontend-design/SKILL.md`? Propose new design tokens or one-off colors (red flag)? Layout choices justified vs existing pages?
 - **ecosystem-consistency-auditor** — Dependency-displaying UI: extends icons + registry-link + badge maps to all supported ecosystems?
 - **a11y-design-auditor** — Keyboard nav specified? Aria labels on icon-only buttons? Focus management on modals? Color-contrast on `bg-background-card`?
 

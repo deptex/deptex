@@ -1,5 +1,6 @@
 import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 function textOf(n: Node | null, src: string): string {
   return n ? src.slice(n.startIndex, n.endIndex) : '';
@@ -46,6 +47,12 @@ export const aspnetCoreDetector: FrameworkDetector = {
         const isController = classAttrs.some((a) => a.name === 'ApiController') ||
           (node.childForFieldName('name') && /Controller$/.test(textOf(node.childForFieldName('name'), source)));
 
+        // [Authorize] semantics: class + method attributes COMBINE (both are
+        // enforced); [AllowAnonymous] anywhere bypasses every [Authorize].
+        const classAuth = classAttrs.filter((a) => a.name === 'Authorize')
+          .map((a) => `Authorize(${a.firstStringArg ?? ''})`);
+        const classAllowAnon = classAttrs.some((a) => a.name === 'AllowAnonymous');
+
         if (!isController && !classRoute) {
           // Fall through to children (nested classes).
         } else {
@@ -60,23 +67,38 @@ export const aspnetCoreDetector: FrameworkDetector = {
 
               const routeOnMethod = firstStringFromAttributeNamed(methodAttrs, 'Route', source);
 
+              const methodAuth = methodAttrs.filter((a) => a.name === 'Authorize')
+                .map((a) => `Authorize(${a.firstStringArg ?? ''})`);
+              const allowAnon = classAllowAnon || methodAttrs.some((a) => a.name === 'AllowAnonymous');
+
               for (const attr of methodAttrs) {
                 const verb = HTTP_ATTRIBUTE_VERBS[attr.name];
                 if (!verb) continue;
                 const verbPath = attr.firstStringArg;
                 const subPath = verbPath ?? routeOnMethod ?? '';
+                const routePattern = joinRoute(classRoute, subPath);
+                const vettedAuthTokens = [...classAuth, ...methodAuth];
+                const result = classifyRoute({
+                  vettedAuthTokens,
+                  publicOverrides: allowAnon ? ['AllowAnonymous'] : [],
+                  routePattern,
+                  centralizedOnly: false,
+                });
                 entryPoints.push({
                   filePath: file.filePath,
                   lineNumber: member.startPosition.row + 1,
                   framework: 'aspnet-core',
                   handlerName,
                   httpMethod: verb,
-                  routePattern: joinRoute(classRoute, subPath),
+                  routePattern,
                   entryPointType: 'http_route',
-                  classification: 'PUBLIC_UNAUTH',
-                  authenticated: null,
-                  authMechanism: null,
-                  middlewareChain: null,
+                  classification: result.classification,
+                  authenticated: result.authenticated,
+                  authMechanism: vettedAuthTokens.length ? 'aspnet_authorize' : null,
+                  middlewareChain: vettedAuthTokens.length ? vettedAuthTokens : null,
+                  // Declaration-bound family — span always demotion-eligible.
+                  handlerSpan: spanOfNode(member),
+                  demotionEligible: true,
                   metadata: { attribute: attr.name },
                 });
               }

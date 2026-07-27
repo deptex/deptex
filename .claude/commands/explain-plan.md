@@ -16,17 +16,17 @@ It's overkill for tiny plans (1-2 milestone bug-fix-shaped plans). Skip it if th
 
 ## Inputs
 
-Optional plan slug or path. If omitted, find the most recently modified `.cursor/plans/*.plan.md` (excluding `archive/`).
+Optional plan slug or path. If omitted, find the most recently modified `.claude/plans/*.plan.md` (excluding `archive/`).
 
 ## Process
 
 1. **Read the plan in full.** This is the source of truth.
-2. **Read the feature brief** at `.cursor/plans/feature-brief-{slug}.md` if it exists — it has the *why* in the user's voice.
-3. **Read the review report** at `.cursor/plans/review-{slug}.md` if it exists — it tells you which decisions were contested and what was ultimately picked.
+2. **Read the feature brief** at `.claude/plans/feature-brief-{slug}.md` if it exists — it has the *why* in the user's voice.
+3. **Read the review report** at `.claude/plans/review-{slug}.md` if it exists — it tells you which decisions were contested and what was ultimately picked.
 4. **Read CLAUDE.md** for architecture context — names of existing flows you'll reference.
 5. **Read 2-3 of the existing files the plan touches most heavily** so you can talk about them in concrete terms ("this hooks into the extraction pipeline at the same point where Semgrep already runs").
 6. **Scan `MEMORY.md` index** for any state memories the plan implicitly relies on (e.g. competing worktrees, prior phases that shipped, conventions).
-7. **Produce the explainer** in chat. Only write to a file (`.cursor/plans/explainer-{slug}.md`) if the explainer comes out >1500 words AND the user explicitly asks for a written copy.
+7. **Produce the explainer** in chat. Only write to a file (`.claude/plans/explainer-{slug}.md`) if the explainer comes out >1500 words AND the user explicitly asks for a written copy.
 
 ## Tone
 

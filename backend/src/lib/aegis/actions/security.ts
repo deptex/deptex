@@ -20,7 +20,7 @@ registerAction(
   },
   async (params: { projectId: string }, ctx: ActionContext): Promise<ActionResult> => {
     const { data, error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('*, project_dependencies!inner(dependency_id, dependencies!inner(name)), dependency_vulnerabilities!inner(osv_id, severity, summary)')
       .eq('project_id', params.projectId)
       .order('depscore', { ascending: false })
@@ -56,7 +56,7 @@ registerAction(
     if (!data) return { success: false, error: 'Vulnerability not found' };
 
     const { data: projectVuln } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('*, project_dependencies!inner(dependency_id, version, dependencies!inner(name))')
       .eq('project_id', params.projectId)
       .single();
@@ -110,7 +110,7 @@ registerAction(
   },
   async (params: { projectId: string }): Promise<ActionResult> => {
     const { data: vulns } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('depscore, epss_score, cisa_kev, is_reachable, suppressed, sla_status, sla_deadline_at, dependency_vulnerabilities!inner(osv_id, severity), project_dependencies!inner(dependencies!inner(name))')
       .eq('project_id', params.projectId)
       .eq('suppressed', false)
@@ -165,7 +165,7 @@ registerAction(
   },
   async (params: { projectId: string; osvId: string }): Promise<ActionResult> => {
     const { data: vuln } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('is_reachable, project_dependencies!inner(id, dependency_id, files_importing_count, dependencies!inner(name))')
       .eq('project_id', params.projectId)
       .single();
@@ -285,7 +285,7 @@ registerAction(
       .single();
 
     const { data: vulnCount } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id', { count: 'exact' })
       .eq('project_id', params.projectId)
       .eq('suppressed', false);
@@ -302,7 +302,7 @@ registerAction(
       .eq('is_current', true);
 
     const { data: topVulns } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('depscore, dependency_vulnerabilities!inner(osv_id, severity, summary), project_dependencies!inner(dependencies!inner(name))')
       .eq('project_id', params.projectId)
       .eq('suppressed', false)

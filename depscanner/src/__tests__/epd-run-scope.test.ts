@@ -3,7 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'fake-key';
 
 /**
  * R2 — EPD must be run-scoped. The reachability classifier writes PDVs per
- * extraction_run_id; project_dependency_vulnerabilities / project_reachable_flows
+ * extraction_run_id; project_dependency_findings / project_reachable_flows
  * rows from PRIOR runs are not deleted, so without an extraction_run_id filter
  * the EPD pass aggregates stale-run rows into the current run's scores. These
  * tests pin that, when a runId is threaded, only the current run's PDVs are
@@ -72,7 +72,7 @@ function seed(storage: FilteringStorage) {
   storage.set('projects', [{ id: PROJECT_ID, organization_id: 'org-1', importance: 1.0, framework: null }]);
   storage.set('organizations', [{ id: 'org-1', epd_max_run_cost_usd: null, epd_budget_exceeded_behavior: null }]);
   storage.set('taint_engine_settings', []);
-  storage.set('project_dependency_vulnerabilities', [
+  storage.set('project_dependency_findings', [
     {
       id: 'pdv-current', project_id: PROJECT_ID, project_dependency_id: 'pd-1', osv_id: 'CVE-2024-1111',
       extraction_run_id: CURRENT_RUN, is_reachable: true, reachability_level: 'module',
@@ -101,7 +101,7 @@ describe('applyEpdScoringFallback — R2 run-scope', () => {
     await applyEpdScoringFallback(storage as unknown as Storage, PROJECT_ID, '/tmp/repo', logger, 0, undefined, CURRENT_RUN);
 
     const writtenIds = storage.upserts
-      .filter((u) => u.table === 'project_dependency_vulnerabilities')
+      .filter((u) => u.table === 'project_dependency_findings')
       .flatMap((u) => u.rows.map((r) => r.id));
     expect(writtenIds).toContain('pdv-current');
     expect(writtenIds).not.toContain('pdv-stale');

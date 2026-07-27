@@ -33,7 +33,7 @@ export function getProjectVulnerabilitiesTool(ctx: { organizationId: string }) {
       if (project.organization_id !== ctx.organizationId) return { error: 'Project not in current organization' };
 
       let query = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(
           'id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
         )

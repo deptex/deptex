@@ -12,7 +12,7 @@ The user names a feature or describes a problem to solve (e.g. "cross-file CVE-t
 
 Anchor in what already exists. Web research before knowing the local terrain produces generic recommendations.
 
-1. Read CLAUDE.md and `.cursor/plans/deptex_projects_roadmap_index.plan.md` (or its successor `ROADMAP.md`).
+1. Read CLAUDE.md and `.claude/plans/deptex_projects_roadmap_index.plan.md` (or its successor `ROADMAP.md`).
 2. Check auto-memory (`MEMORY.md` index) for related work in flight or shipped — don't re-propose what exists.
 3. Grep / read the surface this feature touches:
    - Routes in `backend/src/routes/`
@@ -114,7 +114,7 @@ Skip rounds that aren't relevant. A pipeline-internal feature with no UI doesn't
 
 ## Phase 5 — Output
 
-Write the result to `.cursor/plans/feature-brief-{slug}.md` using this single combined structure:
+Write the result to `.claude/plans/feature-brief-{slug}.md` using this single combined structure:
 
 ```markdown
 # {Feature Name} — Feature Brief

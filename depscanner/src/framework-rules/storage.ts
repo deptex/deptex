@@ -70,7 +70,7 @@ function readHandlerSnippet(
  * `/tmp/deptex-extract-XXXX/<subpath>/routes/api.js`, which also breaks the
  * cross-link's `flow.entry_point_file === ep.file_path` match.
  */
-function toProjectRelative(workspaceRoot: string | undefined, filePath: string): string {
+export function toProjectRelative(workspaceRoot: string | undefined, filePath: string): string {
   if (!filePath) return filePath;
   if (workspaceRoot && path.isAbsolute(filePath)) {
     const rel = path.relative(workspaceRoot, filePath);

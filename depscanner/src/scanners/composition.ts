@@ -219,7 +219,7 @@ export async function composeFindings(
   });
 
   const { data: pdvsData, error: pdvErr } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select(
       'id, osv_id, aliases, reachability_level, contextual_depscore, project_dependency_id'
     )

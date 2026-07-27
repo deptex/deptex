@@ -1,11 +1,11 @@
 import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   GO_HTTP_METHODS_UPPER,
-  classifyFromAuth,
+  buildGoRouteEntryPoint,
   detectGoAuthMechanism,
   findInstancesFromFactory,
   findRouteCalls,
-  lineOf,
+  findUseCalls,
 } from '../util/go';
 
 // Gin:
@@ -22,8 +22,8 @@ export const ginDetector: FrameworkDetector = {
   triggerImports: ['github.com/gin-gonic/gin'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectGoAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from middleware evidence.
+    const authMechanismHint = detectGoAuthMechanism(file.imports);
 
     const ginAlias = file.imports.find((i) => i.source === 'github.com/gin-gonic/gin')?.localName ?? 'gin';
     const instances = findInstancesFromFactory(tree.rootNode, source, [
@@ -32,23 +32,15 @@ export const ginDetector: FrameworkDetector = {
     ]);
     if (instances.size === 0) return [];
 
+    const uses = findUseCalls(tree, source, instances);
     const entryPoints: EntryPoint[] = [];
     for (const call of findRouteCalls(tree, source, instances, GO_HTTP_METHODS_UPPER, ['Any', 'Handle'])) {
       if (!call.httpMethod) continue;
-      entryPoints.push({
-        filePath: file.filePath,
-        lineNumber: lineOf(call.node),
-        framework: 'gin',
-        handlerName: call.handlerName,
-        httpMethod: call.httpMethod,
-        routePattern: call.routePattern,
-        entryPointType: 'http_route',
-        classification,
-        authenticated: !!authMechanism,
-        authMechanism,
-        middlewareChain: null,
+      entryPoints.push(buildGoRouteEntryPoint({
+        call, tree, source, filePath: file.filePath,
+        framework: 'gin', authMechanismHint, uses,
         metadata: { method: call.methodName },
-      });
+      }));
     }
     return entryPoints;
   },

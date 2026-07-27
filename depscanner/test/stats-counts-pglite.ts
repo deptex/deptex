@@ -98,7 +98,7 @@ async function seed(db: PGlite): Promise<void> {
   // --- P1 PDV (active run RUN1) ---
   // severity 'moderate' is a non-band value: counts in vuln_total only. CVE-D is suppressed.
   await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, is_reachable, suppressed, sla_status, depscore) VALUES
       ('${P1}','${D1}','CVE-A','critical','${RUN1}','open', true,  false, 'met',      95),
       ('${P1}','${D1}','CVE-B','high',    '${RUN1}','open', false, false, 'on_track', 90),
@@ -113,7 +113,7 @@ async function seed(db: PGlite): Promise<void> {
     INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, created_at) VALUES
       ('${D5}','${P2}','d5','1.0.0', true, 'dependencies', NOW()),
       ('${D6}','${P2}','d6','1.0.0', true, 'dependencies', NOW());
-    INSERT INTO project_dependency_vulnerabilities
+    INSERT INTO project_dependency_findings
       (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, is_reachable, suppressed, sla_status, depscore) VALUES
       ('${P2}','${D5}','CVE-A','critical','${RUN2}','open', true,  false, NULL, 80),
       ('${P2}','${D6}','CVE-X','critical','${RUN2}','open', false, false, NULL, 99);

@@ -13,7 +13,7 @@ registerAegisTool(
     requiredRbacPermissions: [],
   },
   tool({
-    description: 'Get full detail for a specific vulnerability by OSV ID. Joins dependency_vulnerabilities with project_dependency_vulnerabilities.',
+    description: 'Get full detail for a specific vulnerability by OSV ID. Joins dependency_vulnerabilities with project_dependency_findings.',
     parameters: z.object({
       projectId: z.string().uuid(),
       osvId: z.string(),
@@ -30,7 +30,7 @@ registerAegisTool(
       }
 
       const { data: pdvs } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(
           `
           id, depscore, epss_score, cvss_score, cisa_kev, is_reachable,
@@ -98,7 +98,7 @@ registerAegisTool(
     }),
     execute: async ({ projectId, osvId, suppressedBy }) => {
       const { data: affected, error } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .update({
           suppressed: true,
           suppressed_by: suppressedBy,
@@ -116,7 +116,7 @@ registerAegisTool(
         return JSON.stringify({ error: 'Vulnerability not found in project' });
       }
 
-      await supabase.from('project_vulnerability_events').insert({
+      await supabase.from('project_dependency_finding_events').insert({
         project_id: projectId,
         osv_id: osvId,
         event_type: 'suppressed',
@@ -146,7 +146,7 @@ registerAegisTool(
     }),
     execute: async ({ projectId, osvId, reason, acceptedBy }) => {
       const { data: affected, error } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .update({
           risk_accepted: true,
           risk_accepted_by: acceptedBy,
@@ -165,7 +165,7 @@ registerAegisTool(
         return JSON.stringify({ error: 'Vulnerability not found in project' });
       }
 
-      await supabase.from('project_vulnerability_events').insert({
+      await supabase.from('project_dependency_finding_events').insert({
         project_id: projectId,
         osv_id: osvId,
         event_type: 'accepted',
@@ -193,7 +193,7 @@ registerAegisTool(
     }),
     execute: async ({ projectId, osvId }) => {
       const { data: affected, error } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .update({ suppressed: false, suppressed_by: null, suppressed_at: null })
         .eq('project_id', projectId)
         .eq('osv_id', osvId)
@@ -207,7 +207,7 @@ registerAegisTool(
         return JSON.stringify({ error: 'Vulnerability not found in project' });
       }
 
-      await supabase.from('project_vulnerability_events').insert({
+      await supabase.from('project_dependency_finding_events').insert({
         project_id: projectId,
         osv_id: osvId,
         event_type: 'unsuppressed',
@@ -244,7 +244,7 @@ registerAegisTool(
       const max = maxFixes ?? 10;
 
       let vulnQuery = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select(
           `
           id, project_id, osv_id, depscore,
@@ -528,7 +528,7 @@ registerAegisTool(
       if (projectIds.length === 0) return JSON.stringify({ on_track: 0, warning: 0, breached: 0, breaches: [], approaching: [] });
 
       let query = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('id, project_id, osv_id, severity, sla_status, sla_deadline_at, sla_warning_at, detected_at')
         .in('project_id', projectIds)
         .not('sla_status', 'is', null);

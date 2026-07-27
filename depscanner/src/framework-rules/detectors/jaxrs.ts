@@ -2,13 +2,15 @@ import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   JAXRS_VERB_ANNOTATIONS,
   annotationsOn,
-  classifyFromAuth,
   detectJavaAuthMechanism,
+  javaAuthEvidenceFromAnnotations,
   joinRoute,
   lineOf,
+  mergeJavaAuthEvidence,
   textOf,
   walkTree,
 } from '../util/java';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // JAX-RS / Jakarta RESTful routes (used standalone + by Quarkus + Jersey):
 //   @Path("/items")
@@ -27,8 +29,8 @@ export const jaxrsDetector: FrameworkDetector = {
   ],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectJavaAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from annotation evidence.
+    const authMechanismHint = detectJavaAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -40,6 +42,7 @@ export const jaxrsDetector: FrameworkDetector = {
       const classPrefix = pathAnn.firstStringArg ?? null;
       const nameNode = node.childForFieldName('name');
       const className = nameNode ? textOf(nameNode, source) : null;
+      const classEvidence = javaAuthEvidenceFromAnnotations(classAnns, source);
 
       const body = node.childForFieldName('body');
       if (!body) return;
@@ -52,6 +55,19 @@ export const jaxrsDetector: FrameworkDetector = {
         if (!verbAnn) continue;
         const subPathAnn = methodAnns.find((a) => a.name === 'Path');
         const subRoute = subPathAnn?.firstStringArg ?? '';
+        const routePattern = joinRoute(classPrefix, subRoute);
+
+        // JEE security annotations: method-level REPLACES class-level (Sem 2).
+        const merged = mergeJavaAuthEvidence(
+          classEvidence,
+          javaAuthEvidenceFromAnnotations(methodAnns, source),
+        );
+        const result = classifyRoute({
+          vettedAuthTokens: merged.vettedAuthTokens,
+          publicOverrides: merged.publicOverrides,
+          routePattern,
+          centralizedOnly: false,
+        });
 
         const methodNameNode = member.childForFieldName('name');
         entryPoints.push({
@@ -60,12 +76,15 @@ export const jaxrsDetector: FrameworkDetector = {
           framework: 'jaxrs',
           handlerName: methodNameNode ? textOf(methodNameNode, source) : null,
           httpMethod: JAXRS_VERB_ANNOTATIONS[verbAnn.name],
-          routePattern: joinRoute(classPrefix, subRoute),
+          routePattern,
           entryPointType: 'http_route',
-          classification,
-          authenticated: !!authMechanism,
-          authMechanism,
-          middlewareChain: null,
+          classification: result.classification,
+          authenticated: result.authenticated,
+          authMechanism: authMechanismHint,
+          middlewareChain: merged.vettedAuthTokens.length ? merged.vettedAuthTokens : null,
+          // Declaration-bound family — span always demotion-eligible (Sem 6).
+          handlerSpan: spanOfNode(member),
+          demotionEligible: true,
           metadata: { resource: className, annotation: verbAnn.name },
         });
       }

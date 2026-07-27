@@ -67,7 +67,7 @@ export async function writeOutputs(
 
   const [depsRaw, vulnsRaw, semgrepRaw, secretsRaw, flowsRaw, entryPointsRaw, generatedRulesRaw, jobsRaw] = await Promise.all([
     fetchRows(storage, 'project_dependencies', 'project_id', opts.projectId),
-    fetchRows(storage, 'project_dependency_vulnerabilities', 'project_id', opts.projectId),
+    fetchRows(storage, 'project_dependency_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_semgrep_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_secret_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_reachable_flows', 'project_id', opts.projectId),

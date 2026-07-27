@@ -269,7 +269,7 @@ Frontend (scan result)
       → Worker: depscan -t pypi
       → Worker: PURL parser (generic, handles pkg:pypi/...)
         → project_dependencies rows
-        → project_dependency_vulnerabilities rows
+        → project_dependency_findings rows
 ```
 
 ---
@@ -557,6 +557,6 @@ END $$;
    - [ ] Correct ecosystem stored in `project_repositories`
    - [ ] cdxgen generates valid SBOM (check Supabase storage bucket)
    - [ ] depscan runs with correct `-t` flag (check worker logs for `dep-scan command`)
-   - [ ] Vulnerabilities parsed and stored in `project_dependency_vulnerabilities`
+   - [ ] Vulnerabilities parsed and stored in `project_dependency_findings`
    - [ ] Dependencies visible in the Dependencies tab
    - [ ] Correct icon on the project card

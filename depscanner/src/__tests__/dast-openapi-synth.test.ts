@@ -42,12 +42,17 @@ describe('synthesizeOpenApi', () => {
       expect(out.endpoint_count).toBe(0);
     });
 
-    it('drops OFFLINE_WORKER classification', () => {
+    it('scans an http_route OFFLINE_WORKER (webhook) but drops a non-http OFFLINE_WORKER', () => {
       const out = synthesizeOpenApi(
-        [ep({ classification: 'OFFLINE_WORKER', route_pattern: '/queue/process' })],
+        [
+          // signature-verified webhook — real external HTTP surface → scanned
+          ep({ classification: 'OFFLINE_WORKER', route_pattern: '/webhooks/stripe', http_method: 'POST', handler_name: 'stripeWebhook' }),
+          // genuine background handler (non-http_route) → dropped
+          ep({ classification: 'OFFLINE_WORKER', entry_point_type: 'message_handler', route_pattern: '/queue/process' }),
+        ],
         { targetUrl: 'https://api.example.com' },
       );
-      expect(out.endpoint_count).toBe(0);
+      expect(out.endpoint_count).toBe(1);
     });
 
     it('drops health-probe paths (case-insensitive)', () => {

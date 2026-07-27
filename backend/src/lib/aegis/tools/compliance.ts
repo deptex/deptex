@@ -87,7 +87,7 @@ registerAegisTool(
     execute: async ({ projectId, osvIds }) => {
       const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const { data: pdvs } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, reachability_level, is_reachable')
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId);
@@ -211,7 +211,7 @@ registerAegisTool(
       }
       const auditActiveRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const { data: pdvs } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, reachability_level, is_reachable')
         .eq('project_id', projectId)
         .eq('extraction_run_id', auditActiveRunId);

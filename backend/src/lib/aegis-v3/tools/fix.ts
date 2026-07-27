@@ -168,7 +168,7 @@ const requestFix: AegisToolEntry<{
       const activeRunId =
         (await getActiveExtractionId(ctx.supabase as SupabaseClient, projectId)) ?? NO_ACTIVE_RUN;
       const { data: pdvRow } = await ctx.supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('suppressed, risk_accepted, reachability_level, is_reachable, runtime_confirmed_at')
         .eq('project_id', projectId)
         .eq('osv_id', findingId)

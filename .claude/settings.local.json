@@ -87,7 +87,11 @@
       "WebFetch(domain:myrror.security)",
       "Bash(echo \"exit:$?\")",
       "Bash(npx vite:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(docker rm *)",
+      "Bash(rm -f /c/Coding/Deptex/.claude/worktrees/dast-auto-openapi/depscanner/_e2e-dast-local.ts)",
+      "Bash(git -C /c/Coding/Deptex/.claude/worktrees/dast-auto-openapi status --porcelain)",
+      "Bash(git -C /c/Coding/Deptex/.claude/worktrees/dast-auto-openapi log --oneline -1)"
     ],
     "defaultMode": "bypassPermissions"
   }

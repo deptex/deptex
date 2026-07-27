@@ -4,7 +4,7 @@
  *
  * `updateReachabilityLevels()` is the function that turns the per-extraction
  * pile of `project_reachable_flows` rows into the final `reachability_level`
- * stamped on each `project_dependency_vulnerabilities` row. Phase 6.5 added
+ * stamped on each `project_dependency_findings` row. Phase 6.5 added
  * three new behaviors that this test pins:
  *
  *   1. A `taint_engine` flow with a matching `osv_id` promotes the PDV to
@@ -124,7 +124,7 @@ const CVE = 'CVE-2021-23337';
 const SUPPRESSED_HASH = 'a'.repeat(64);
 
 function seedBasePdv(fs: FakeStorage) {
-  fs.set('project_dependency_vulnerabilities', [
+  fs.set('project_dependency_findings', [
     {
       id: PDV_ID,
       project_dependency_id: PD_ID,
@@ -181,7 +181,7 @@ describe('updateReachabilityLevels — Phase 6.5 confirmed-tier semantics', () =
     );
 
     const update = fs.updates.find(
-      (u) => u.table === 'project_dependency_vulnerabilities' && u.filter.id === PDV_ID,
+      (u) => u.table === 'project_dependency_findings' && u.filter.id === PDV_ID,
     );
     expect(update).toBeDefined();
     expect(update!.values.reachability_level).toBe('confirmed');
@@ -363,7 +363,7 @@ describe('updateReachabilityLevels — Phase 6.5 confirmed-tier semantics', () =
     const SIBLING_PDV = 'pdv-sibling';
     const SIBLING_CVE = 'CVE-2020-28500';
     const fs = new FakeStorage();
-    fs.set('project_dependency_vulnerabilities', [
+    fs.set('project_dependency_findings', [
       { id: PDV_ID, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: CVE },
       { id: SIBLING_PDV, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: SIBLING_CVE },
     ]);
@@ -425,7 +425,7 @@ describe('updateReachabilityLevels — Phase 6.5 confirmed-tier semantics', () =
     // The classifier must match the flow's CVE osv_id against the PDV's
     // aliases, not just its primary id.
     const fs = new FakeStorage();
-    fs.set('project_dependency_vulnerabilities', [
+    fs.set('project_dependency_findings', [
       {
         id: PDV_ID,
         project_dependency_id: PD_ID,

@@ -2073,7 +2073,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const showIgnored = req.query.show_ignored === 'true';
 
     let countQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('*', { count: 'exact', head: true })
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds)
@@ -2088,7 +2088,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const to = from + perPage - 1;
 
     let dataQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select(
         'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status'
       )

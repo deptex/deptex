@@ -172,7 +172,7 @@ export const SEVERITY_TO_CVSS: Record<string, number> = {
 /**
  * Color helper for an importance value. Higher importance = redder/stronger;
  * lower importance = muted. Returns Tailwind tokens (no hardcoded hex), per
- * .cursor/skills/frontend-design/SKILL.md.
+ * .claude/skills/frontend-design/SKILL.md.
  */
 export function importanceColorClasses(importance: number | null | undefined): {
   text: string;

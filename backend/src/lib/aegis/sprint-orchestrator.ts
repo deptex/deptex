@@ -157,7 +157,7 @@ async function discoverVulnerabilityCandidates(
   organizationId?: string,
 ): Promise<SprintCandidate[]> {
   let query = supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select(`
       id, osv_id, severity, depscore, is_reachable, reachability_level,
       suppressed, risk_accepted,

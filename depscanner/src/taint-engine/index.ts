@@ -110,7 +110,18 @@ export {
   fallbackUnresolvedResolveDep,
   computeFlowSignatureHash,
   canonicalRepoPath,
+  computeEntryPointTag,
+  isDetectorCoercedFlow,
 } from './storage';
+
+export {
+  matchFlowToRoutes,
+  parseEntryPointTag,
+  tagForClass,
+  TAG_UNMATCHED,
+  TAG_LEGACY_PUBLIC,
+} from './match-flow-to-routes';
+export type { EntryPointAuthMap, FlowRouteMatch } from './match-flow-to-routes';
 export type {
   WriteFlowsOptions,
   WriteFlowsResult,

@@ -99,12 +99,18 @@ function main(): void {
       const l = String(x.reachability_level ?? 'unknown');
       by_reachability[l] = (by_reachability[l] ?? 0) + 1;
     }
-    // Observed CVE index (osv_id + CVE aliases) → verdict, for ground-truth matching.
+    // Observed advisory index (osv_id + every alias) → verdict, for ground-truth
+    // matching. Indexes ALL standard OSV advisory formats, not just CVE-*: an
+    // advisory whose canonical id is GHSA/PYSEC/RUSTSEC/GO with no CVE alias
+    // (e.g. a Pillow GHSA-only infinite-loop bug) is a real observed finding, and
+    // restricting to CVE-* wrongly counted its hand label as a recall gap.
     const observed = new Map<string, any>();
     for (const x of uniq) {
       const ids = [x.osv_id, ...(Array.isArray(x.aliases) ? x.aliases : [])].filter(Boolean);
       for (const id of ids) {
-        if (/^CVE-\d{4}-\d+$/i.test(String(id))) observed.set(String(id).toUpperCase(), x);
+        if (/^(CVE|GHSA|PYSEC|RUSTSEC|GO|OSV|MAL|DLA|DSA|GMS)-/i.test(String(id))) {
+          observed.set(String(id).toUpperCase(), x);
+        }
       }
     }
     const gt = Array.isArray(repo.ground_truth_cves) ? repo.ground_truth_cves : [];

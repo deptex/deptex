@@ -7,6 +7,7 @@
 
 import type { Storage } from './storage';
 import type { ExtractionLogger } from './logger';
+import type { EntryPointAuthMap } from './taint-engine/match-flow-to-routes';
 
 /**
  * Logger interface for pipeline; full ExtractionLogger or minimal mock for tests.
@@ -147,4 +148,16 @@ export interface PipelineContext {
    * promotion is disabled (fail-safe). Defaults to 0.
    */
   httpEntryPointCount: number;
+
+  /**
+   * Per-file, per-route auth records (entry-point auth classification, T2).
+   * Built at usage_extraction from the detected entry points + cross-file
+   * postProcess records, keyed by project-relative POSIX path (byte-identical to
+   * a flow's `entry_point_file`). The taint engine's `writeFlows` joins each flow
+   * against this via `matchFlowToRoutes` to stamp `entry_point_tag`; the fp-filter
+   * reads it for route context. In-memory only — never persisted. Empty map until
+   * usage_extraction runs (fail-safe: no records ⇒ every flow stamps `unmatched`
+   * ⇒ PUBLIC weight, no merge vote).
+   */
+  entryPointAuth: EntryPointAuthMap;
 }

@@ -84,7 +84,7 @@ export async function gatherVulnerabilityContext(req: FixRequest): Promise<Recor
     // with "no patched version available".
     if (!vulnerability) {
       let pdvQuery = supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, severity, summary, fixed_versions, aliases, cvss_score')
         .eq('project_id', req.projectId)
         .eq('osv_id', req.vulnerabilityOsvId);
@@ -102,7 +102,7 @@ export async function gatherVulnerabilityContext(req: FixRequest): Promise<Recor
   let reachability: any = null;
   if (projectDependency?.id && req.vulnerabilityOsvId) {
     const { data: rch } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('reachability_level, reachability_factor, importing_files, epd_factor')
       .eq('project_dependency_id', projectDependency.id)
       .eq('osv_id', req.vulnerabilityOsvId)

@@ -200,7 +200,7 @@ async function main() {
     assert(typeof pdId === 'string', `inserted project_dependency id (got: ${typeof pdId})`);
 
     // Hit the exact shape that failed in the CLI run: text[] = ['4.18.0'].
-    const { error } = await storage.from('project_dependency_vulnerabilities').insert({
+    const { error } = await storage.from('project_dependency_findings').insert({
       project_id: projectId,
       project_dependency_id: pdId,
       osv_id: 'CVE-TEST-0001',

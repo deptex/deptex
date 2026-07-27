@@ -295,7 +295,7 @@ const RUN_ID = 'run-1';
 
 /** Seed one transitive jackson dep with no first-party import (petclinic shape). */
 function seedJackson(fsk: FakeStorage, opts: { name: string; osvId: string; summary: string }) {
-  fsk.set('project_dependency_vulnerabilities', [
+  fsk.set('project_dependency_findings', [
     {
       id: 'pdv-1',
       project_dependency_id: 'pd-1',
@@ -338,7 +338,7 @@ function seedJackson(fsk: FakeStorage, opts: { name: string; osvId: string; summ
 
 function verdictOf(fsk: FakeStorage, pdvId: string): { level?: string; details?: any } {
   const u = fsk.updates.find(
-    (x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === pdvId && 'reachability_level' in x.values,
+    (x) => x.table === 'project_dependency_findings' && x.filter.id === pdvId && 'reachability_level' in x.values,
   );
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }

@@ -37,14 +37,14 @@ For each milestone in the active plan:
 
 ## Inputs
 
-Look for the implementation plan in `.cursor/plans/*.plan.md`. If no plan exists, ask the user to run `/plan-feature` first.
+Look for the implementation plan in `.claude/plans/*.plan.md`. If no plan exists, ask the user to run `/plan-feature` first.
 
 ## Before Starting
 
 1. Read the full plan — every section, not just the task list
-2. Read `.cursor/skills/frontend-design/SKILL.md` for design standards
-3. Read `.cursor/skills/ui-principles/SKILL.md` for craft principles
-4. Read `.cursor/skills/add-new-features/SKILL.md` for backend patterns
+2. Read `.claude/skills/frontend-design/SKILL.md` for design standards
+3. Read `.claude/skills/ui-principles/SKILL.md` for craft principles
+4. Read `.claude/skills/add-new-features/SKILL.md` for backend patterns
 5. Check that any prerequisite migrations or features mentioned in the plan exist
 6. **Read the actual code you'll be modifying or extending:**
    - Read the existing route files this feature touches or is adjacent to

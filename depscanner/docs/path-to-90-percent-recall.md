@@ -2,8 +2,6 @@
 
 Re-classification of the 36 non-validated CVEs in the clean run
 `bench-iterate/v_base/2026-05-12T20-00-19/` (52/88 = 59.1%, $0.22, 33min).
-Companion: `.cursor/plans/triage-2026-05-12-post-abcd.json` (now stale — only
-matches the 17:41 pre-E/F1 snapshot; this doc supersedes it).
 
 This doc is the post-mortem of the 26.1% → 59.1% session arc and the
 honest forward plan.

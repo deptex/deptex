@@ -41,7 +41,7 @@ Query each finding source via the Supabase MCP, always filtering `extraction_run
 
 | Source | Table | Key columns to pull |
 |---|---|---|
-| SCA / dependency CVEs | `project_dependency_vulnerabilities` (PDV) | `osv_id, severity, reachability_level, is_reachable, runtime_confirmed_at, depscore, contextual_depscore, cvss_score, epss_score, cisa_kev, entry_point_classification, epd_status, suppressed, aliases, summary, fixed_versions, project_dependency_id` |
+| SCA / dependency CVEs | `project_dependency_findings` (PDV) | `osv_id, severity, reachability_level, is_reachable, runtime_confirmed_at, depscore, contextual_depscore, cvss_score, epss_score, cisa_kev, entry_point_classification, epd_status, suppressed, aliases, summary, fixed_versions, project_dependency_id` |
 | Taint flows (per CVE) | `project_reachable_flows` | `osv_id, entry_point_file, entry_point_line, entry_point_method, entry_point_tag, sink_file, sink_line, sink_method, flow_length, reachability_source, flow_signature_hash, flow_nodes` |
 | SAST | `project_semgrep_findings` | `rule_id, severity, file_path, start_line, cwe_ids, category, code_snippet` |
 | Secrets | `project_secret_findings` | (TruffleHog) `detector_type, file_path, verified` |
@@ -108,7 +108,7 @@ Generic verdicts with no `file:line` evidence are rejected — be specific or st
 
 ## Phase 5 — Report back + STOP
 
-Print a tight chat summary: the tally, the top action items (verdict + one-line + recommended fix + `file:line`), and the de-dup clusters. Then **stop and ask Henry how he wants to proceed** — do not apply any fix. Optionally write the full per-finding table to `.cursor/audits/evaluate-findings-<project>-<run>.md` for the record.
+Print a tight chat summary: the tally, the top action items (verdict + one-line + recommended fix + `file:line`), and the de-dup clusters. Then **stop and ask Henry how he wants to proceed** — do not apply any fix. Optionally write the full per-finding table to `.claude/audits/evaluate-findings-<project>-<run>.md` for the record.
 
 Report shape:
 
