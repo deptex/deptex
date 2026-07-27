@@ -190,7 +190,7 @@ export async function buildOrgVulnerabilitiesUnchecked(
   const { data: rows, error } = await supabase
     .from('project_dependency_findings')
     .select(
-      'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted',
+      'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, detected_at, created_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted',
     )
     .in('project_id', projectIds)
     .in('extraction_run_id', activeRunIds)
@@ -231,6 +231,11 @@ export async function buildOrgVulnerabilitiesUnchecked(
       fixed_versions: r.fixed_versions || [],
       published_at: r.published_at ?? null,
       modified_at: null,
+      // First-seen: the SLA machinery anchors detected_at to the EARLIEST
+      // 'detected' event (stable across re-scans); created_at is this run's
+      // insert time, the fallback when no SLA policy stamped detected_at.
+      detected_at: r.detected_at ?? null,
+      created_at: r.created_at ?? null,
       dependency_id: dep?.dependency_id ?? '',
       dependency_name: dep?.name ?? 'Unknown',
       dependency_version: dep?.version ?? 'Unknown',

@@ -4682,6 +4682,10 @@ export interface ProjectVulnerability {
   fixed_versions: string[];
   published_at: string | null;
   modified_at: string | null;
+  /** First seen by the scanner (earliest 'detected' event; stable across re-scans). Org bundle rows only. */
+  detected_at?: string | null;
+  /** Row insert time for the active run — first-seen fallback when detected_at is unset. */
+  created_at?: string | null;
   dependency_id: string;
   dependency_name: string;
   dependency_version: string;
