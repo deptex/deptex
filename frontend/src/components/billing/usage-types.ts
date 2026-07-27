@@ -31,7 +31,9 @@ export interface ProjectOption {
   framework?: string | null;
 }
 
-export type DateRangePreset = 'last_7d' | 'last_30d' | 'this_month' | 'last_month' | 'last_90d' | 'custom';
+// 'all_time' means "no bounds" — offered by the findings Found filter, never by
+// usage (whose queries always need a bounded window).
+export type DateRangePreset = 'last_1d' | 'last_7d' | 'last_30d' | 'this_month' | 'last_month' | 'last_90d' | 'custom' | 'all_time';
 
 export interface DateRange {
   start: Date;

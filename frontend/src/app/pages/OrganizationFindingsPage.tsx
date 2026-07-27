@@ -12,6 +12,7 @@ import VulnerabilityExpandableTable, {
   type SecurityTableRow,
 } from '../../components/security/VulnerabilityExpandableTable';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
+import PageHeader from '../../components/PageHeader';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -75,62 +76,50 @@ export default function OrganizationFindingsPage() {
     void load();
   }, [load]);
 
-  // App globally hides body/html scrollbars in Main.css. Restore them on this
-  // route via a scoped class — same trick as Compliance.
-  useEffect(() => {
-    document.documentElement.classList.add('security-scrollbar');
-    document.body.classList.add('security-scrollbar');
-    return () => {
-      document.documentElement.classList.remove('security-scrollbar');
-      document.body.classList.remove('security-scrollbar');
-    };
-  }, []);
-
   if (!organizationId) {
     return (
-      <main className="flex flex-col flex-1 min-h-0 w-full bg-background">
-        <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex h-svh w-full flex-col bg-background">
+        <PageHeader title="Findings" fullWidth centerTitle />
+        <div className="px-4 py-6 sm:px-6">
           <p className="text-sm text-foreground-secondary">Loading organization…</p>
         </div>
       </main>
     );
   }
 
+  // Full-bleed work surface (Sentry/Linear/Vercel pattern): slim fixed header
+  // band, table spans the content area, scrolling lives in the content pane —
+  // not a centered max-w reading column.
   return (
-    <main className="flex flex-col flex-1 min-h-0 w-full bg-background">
-      <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        {/* Title */}
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Findings</h1>
-          <p className="mt-1 max-w-2xl text-sm text-foreground-secondary">
-            All findings across your organization.
-          </p>
+    <main className="flex h-svh w-full flex-col bg-background">
+      <PageHeader title="Findings" fullWidth centerTitle />
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <div className="w-full space-y-4 px-4 py-4 sm:px-6">
+          {error && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+
+          {/* Flat findings table — non-embedded mode brings its own toolbar,
+              thead, and rounded card frame. */}
+          {loading && allRows.length === 0 ? (
+            <OrganizationVulnerabilitiesTableSkeleton />
+          ) : (
+            <VulnerabilityExpandableTable
+              organizationId={organizationId}
+              rows={allRows}
+              canManageFindings={!!userPermissions?.manage_findings}
+              canTriggerFix={!!userPermissions?.trigger_fix}
+              trackerLinks={trackerLinks}
+              groupSuppressions={groupSuppressions}
+              acknowledgements={acknowledgements}
+              onTrackerChange={() => void loadTrackerLinks()}
+              onAckChange={() => void loadTrackerLinks()}
+              onStatusChange={() => { void load(true); void loadTrackerLinks(); }}
+            />
+          )}
         </div>
-
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-
-        {/* Flat findings table — non-embedded mode brings its own Type+Project
-            filter bar, thead, and rounded card frame. */}
-        {loading && allRows.length === 0 ? (
-          <OrganizationVulnerabilitiesTableSkeleton />
-        ) : (
-          <VulnerabilityExpandableTable
-            organizationId={organizationId}
-            rows={allRows}
-            canManageFindings={!!userPermissions?.manage_findings}
-            canTriggerFix={!!userPermissions?.trigger_fix}
-            trackerLinks={trackerLinks}
-            groupSuppressions={groupSuppressions}
-            acknowledgements={acknowledgements}
-            onTrackerChange={() => void loadTrackerLinks()}
-            onAckChange={() => void loadTrackerLinks()}
-            onStatusChange={() => { void load(true); void loadTrackerLinks(); }}
-          />
-        )}
       </div>
     </main>
   );

@@ -24,14 +24,14 @@ describe('ProjectsAssetTable', () => {
     expect(screen.getByText('checkout-svc')).toBeTruthy();
   });
 
-  it('shows the Team column when showTeamColumn is on (org context)', () => {
+  it('folds the owner team into the project subtext when showTeamColumn is on (org context)', () => {
     render(<ProjectsAssetTable summaries={summaries} projects={projects} loading={false} showTeamColumn />);
-    expect(screen.getByText('Team')).toBeTruthy();
+    expect(screen.getByText(/Payments/)).toBeTruthy();
   });
 
-  it('hides the Team column when showTeamColumn is off (team context)', () => {
+  it('omits the owner team from the subtext when showTeamColumn is off (team context)', () => {
     render(<ProjectsAssetTable summaries={summaries} projects={projects} loading={false} showTeamColumn={false} />);
-    expect(screen.queryByText('Team')).toBeNull();
+    expect(screen.queryByText(/Payments/)).toBeNull();
   });
 
   it('renders the empty state with the supplied hint when there are no projects', () => {
