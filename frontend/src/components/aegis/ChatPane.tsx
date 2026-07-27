@@ -2,11 +2,15 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
-import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
+import { aegisApi, type AegisMessage, type AegisTask, type AegisThread, type MessagePart, type TaskRunStatus } from '../../lib/aegis-api';
+import type { SlashCommand } from './ChatInput';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { MessageBubble } from './MessageBubble';
+import { TaskHeader } from './TaskHeader';
 import { ChatInput } from './ChatInput';
+import { Skeleton } from '../ui/skeleton';
 import { ChatTodos } from './ChatTodos';
 import { ThreadIcon } from './ThreadIcon';
 import type { TopUpReason } from '../billing/TopUpModal';
@@ -31,6 +35,19 @@ const AEGIS_PROMPTS = [
 const TYPE_MS = 55;
 const BACKSPACE_MS = 30;
 const HOLD_MS = 2400;
+
+// A task's fix row is "running" (agent working) in any of these states.
+const TASK_RUNNING_STATUSES = new Set(['approved', 'planning', 'executing']);
+// Follow-up poll fallback (for when realtime silently stalls): cadence, the cap
+// if a run never even starts (wake failed / queued behind another), and the
+// hard ceiling while a run is genuinely going (realtime covers anything longer).
+const FOLLOWUP_POLL_MS = 3500;
+// A snappier cadence until the run is confirmed running, so the thinking dot /
+// Stop reconcile quickly right after a send (the wake RPC has already flipped
+// the fix row by the time this fires).
+const FOLLOWUP_STARTUP_POLL_MS = 900;
+const FOLLOWUP_NEVER_STARTED_CAP_MS = 90_000;
+const FOLLOWUP_MAX_MS = 15 * 60_000;
 
 function formatRelative(iso: string): string {
   const ts = Date.parse(iso);
@@ -91,14 +108,59 @@ interface ChatPaneProps {
   // here so we don't duplicate logic between sidebar and landing.
   recents?: AegisThread[];
   onSelectRecent?: (threadId: string) => void;
+  // Task threads are driven by an autonomous server-side agent loop, not the
+  // user's SSE stream — so they won't see new messages unless we subscribe.
+  // When true, ChatPane realtime-reloads the thread on each new persisted
+  // message. Off (default) for normal chats so their useChat flow is untouched.
+  liveReload?: boolean;
+  // The task this chat belongs to (task threads only). When present, a compact
+  // task row is pinned above the conversation; clicking it opens the detail
+  // panel via onOpenTaskDetails.
+  task?: AegisTask | null;
+  // True while the parent's task list is still unresolved (listTasks in flight
+  // or failed), i.e. `task` above may be null only because task-ness is
+  // UNKNOWN. handleSubmit fails existing-thread sends closed while this is set.
+  tasksLoading?: boolean;
+  onOpenTaskDetails?: () => void;
   // Billing: gates the in-chat "Top up" CTA on a cost_cap block, and prefills
   // the add-card form. Sourced from OrganizationLayout's userPermissions.
   canManageBilling?: boolean;
   userEmail?: string | null;
+  // Fired once, when the thread's history finishes loading (or fails). Lets the
+  // parent hold the task side-panel closed until the conversation is on screen,
+  // so it doesn't sit open over the loading skeleton.
+  onFirstLoad?: () => void;
+}
+
+// The task chat's slash palette (rendered by ChatInput; executed in ChatPane).
+const TASK_SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'status', description: 'Show run status — step, context %, elapsed' },
+  { name: 'retry', description: 'Re-run this task from where it stopped' },
+];
+const RETRY_TEXT = 'Please try this again.';
+
+function formatRunStatus(s: TaskRunStatus): string {
+  if (!s.run) {
+    return s.taskStatus === 'working' ? 'Starting up — no telemetry yet.' : `Task ${s.taskStatus}. No active run.`;
+  }
+  const r = s.run;
+  const parts: string[] = [`Run: ${r.fixStatus}`];
+  if (r.step != null) parts.push(`step ${r.step}`);
+  if (r.contextPct != null) parts.push(`context ${Math.round(r.contextPct * 100)}%`);
+  if (r.startedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - new Date(r.startedAt).getTime()) / 1000));
+    parts.push(`${secs < 60 ? `${secs}s` : `${Math.round(secs / 60)}m`} elapsed`);
+  }
+  if (r.prNumber) parts.push(`PR #${r.prNumber}`);
+  return parts.join(' · ');
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
-  return stored.map((msg) => {
+  return stored
+    // Hidden turns (e.g. the "continue" instruction behind a Compact-context
+    // action) are replayed for the model but never shown in the thread.
+    .filter((msg) => !(msg.metadata as any)?.hidden)
+    .map((msg) => {
     const parts: any[] = [];
     const rawParts: MessagePart[] = msg.metadata?.parts ?? [];
 
@@ -108,10 +170,23 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
     }
 
     let hasText = false;
+    let hasStep = false;
     for (const p of rawParts) {
       if (p.type === 'text') {
         parts.push({ type: 'text', text: p.text });
         hasText = true;
+      } else if ((p as any).type === 'step') {
+        // A fix-worker tool-use step (gray icon + label line; optional command
+        // renders as a terminal line when expanded).
+        parts.push({
+          type: 'step',
+          icon: (p as any).icon,
+          label: (p as any).label,
+          command: (p as any).command,
+          diff: (p as any).diff,
+          output: (p as any).output,
+        });
+        hasStep = true;
       } else if (p.type === 'tool-call') {
         // emitted via paired tool-result below
       } else if (p.type === 'tool-result') {
@@ -128,7 +203,10 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
       }
     }
 
-    if (!hasText && msg.content) parts.unshift({ type: 'text', text: msg.content });
+    // A `step` part carries its own label, so don't also prepend `content` (which
+    // mirrors that label) as a duplicate text line. A card message (tool-result,
+    // no text/step) still surfaces its content as the caption above the card.
+    if (!hasText && !hasStep && msg.content) parts.unshift({ type: 'text', text: msg.content });
     if (parts.length === 0) parts.push({ type: 'text', text: msg.content ?? '' });
 
     return {
@@ -141,6 +219,50 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
   });
 }
 
+// Shown while an existing thread's history is being fetched. A stand-in for the
+// conversation — alternating assistant text blocks (left) and user bubbles
+// (right) on the same centered max-w-3xl column and alignment as real
+// MessageBubbles — so the load resolves into place instead of the pane sitting
+// empty with the task header already popped in. Runs long and fades downward
+// (the app-wide `mask-image` treatment used by the tables/settings skeletons)
+// so it reads as "conversation loading", not a fixed block.
+const CHAT_SKELETON_TURNS: { assistant: string[]; user: string }[] = [
+  { assistant: ['w-1/2', 'w-4/5', 'w-2/3'], user: 'w-2/5' },
+  { assistant: ['w-3/4', 'w-5/6', 'w-1/2'], user: 'w-1/3' },
+  { assistant: ['w-2/3', 'w-4/5'], user: 'w-1/2' },
+];
+
+function ChatSkeleton() {
+  return (
+    <div
+      aria-busy="true"
+      aria-label="Loading conversation"
+      className="py-4 opacity-70 pointer-events-none select-none"
+      style={{
+        maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+      }}
+    >
+      {CHAT_SKELETON_TURNS.map((turn, i) => (
+        <div key={i}>
+          <div className="px-4 py-2">
+            <div className="mx-auto max-w-3xl space-y-2.5">
+              {turn.assistant.map((w, j) => (
+                <Skeleton key={j} className={`h-3.5 ${w}`} />
+              ))}
+            </div>
+          </div>
+          <div className="px-4 py-2">
+            <div className="mx-auto max-w-3xl flex justify-end">
+              <Skeleton className={`h-9 rounded-2xl ${turn.user}`} />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ChatPane({
   organizationId,
   threadId: propThreadId,
@@ -150,8 +272,13 @@ export function ChatPane({
   onThreadUpdated,
   recents,
   onSelectRecent,
+  liveReload = false,
+  task,
+  tasksLoading = false,
+  onOpenTaskDetails,
   canManageBilling,
   userEmail,
+  onFirstLoad,
 }: ChatPaneProps) {
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
@@ -291,8 +418,10 @@ export function ChatPane({
 
   const onThreadCreatedRef = useRef(onThreadCreated);
   const onThreadUpdatedRef = useRef(onThreadUpdated);
+  const onFirstLoadRef = useRef(onFirstLoad);
   useEffect(() => { onThreadCreatedRef.current = onThreadCreated; });
   useEffect(() => { onThreadUpdatedRef.current = onThreadUpdated; });
+  useEffect(() => { onFirstLoadRef.current = onFirstLoad; });
 
   // The transport owns the actual fetch. We wrap it so we can:
   //   1. attach the auth bearer dynamically (token may rotate during a session)
@@ -406,6 +535,13 @@ export function ChatPane({
   const isStreaming = status === 'streaming' || status === 'submitted';
   useEffect(() => { sendMessageRef.current = sendMessage; });
 
+  // The seed-load gate. An existing thread must fetch its history before it can
+  // render — until then show a chat skeleton rather than an empty pane with the
+  // task header already popped in (the "started task shows before the chat
+  // loads" jump). A brand-new chat (no propThreadId) has nothing to fetch, so
+  // it starts un-gated and goes straight to the landing.
+  const [messagesLoading, setMessagesLoading] = useState<boolean>(!!propThreadId);
+
   // On unmount (thread switch), abort the local SSE fetch. The server-side
   // resumable-stream tee keeps writing to Redis regardless of socket state, so
   // when the user navigates back, the seed-load + resumeStream() useEffect
@@ -438,7 +574,12 @@ export function ChatPane({
   // started but before it returned (the assistant row might be missing
   // from the DB read but already done in Redis).
   useEffect(() => {
-    if (!propThreadId) return;
+    // Brand-new chat: nothing to fetch, so it's "loaded" immediately — signal
+    // ready so the parent doesn't wait on a load that never happens.
+    if (!propThreadId) {
+      onFirstLoadRef.current?.();
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -447,6 +588,15 @@ export function ChatPane({
         setMessages(buildInitialMessages(msgs));
       } catch {
         /* leave whatever is on screen on load failure */
+      } finally {
+        // Reveal the conversation (and the task header) as one, whether the
+        // fetch succeeded or failed — a failed load falls through to the normal
+        // empty/error rendering, never a stuck skeleton. Signal the parent so
+        // the task side-panel can slide in now (not over the skeleton).
+        if (!cancelled) {
+          setMessagesLoading(false);
+          onFirstLoadRef.current?.();
+        }
       }
       if (cancelled) return;
       try {
@@ -463,10 +613,243 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Live "task is running" signal for the thinking dot. The worker narrates via
+  // realtime inserts (not useChat's status), so the dot must key off the fix
+  // row's status — project_security_fixes is in the realtime publication. Dot on
+  // while any of the thread's fixes is queued/executing; off once they resolve.
+  const [taskWorking, setTaskWorking] = useState(false);
+  // A follow-up sent while the agent is mid-run is persisted + queued (the worker
+  // drains it when the current run ends). Surfaced so the bubble doesn't read as ignored.
+  const [taskQueuedHint, setTaskQueuedHint] = useState(false);
+  // Client-side output of a slash command (/status, /retry) — an ephemeral,
+  // non-persisted line above the composer (the thread reloads from the DB, so a
+  // fake chat message wouldn't survive).
+  const [commandOutput, setCommandOutput] = useState<string | null>(null);
+  // Bumped each time a task follow-up is sent — arms the realtime-independent
+  // poll fallback below so the reply always lands even if the realtime socket
+  // has silently stalled (the "nothing came until I refreshed" bug).
+  const [followupPollNonce, setFollowupPollNonce] = useState(0);
+  useEffect(() => {
+    if (!taskWorking) setTaskQueuedHint(false); // run ended → pickup imminent
+  }, [taskWorking]);
+
+  useEffect(() => {
+    if (!liveReload || !propThreadId) {
+      setTaskWorking(false);
+      return;
+    }
+    let cancelled = false;
+    const evaluate = async () => {
+      const { data } = await supabase
+        .from('project_security_fixes')
+        .select('status')
+        .eq('thread_id', propThreadId);
+      if (!cancelled) setTaskWorking((data ?? []).some((r: { status: string }) => TASK_RUNNING_STATUSES.has(r.status)));
+    };
+    void evaluate();
+    const channel = supabase
+      .channel(`aegis-task-fix-${propThreadId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'project_security_fixes', filter: `thread_id=eq.${propThreadId}` },
+        () => void evaluate(),
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveReload, propThreadId]);
+
+  // Live narration for task threads. The task's agent loop runs server-side and
+  // persists each beat to aegis_chat_messages (already in the realtime
+  // publication); subscribe and reload the thread as beats land. Gated to
+  // liveReload so normal chats (driven by useChat/SSE) are never reloaded out
+  // from under an in-flight stream. We also skip while inFlightRef is set —
+  // the rare case where a user is actively sending in a task thread.
+  useEffect(() => {
+    if (!liveReload || !propThreadId) return;
+    const channel = supabase
+      .channel(`aegis-task-msgs-${propThreadId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${propThreadId}` },
+        async () => {
+          if (inFlightRef.current) return;
+          try {
+            const msgs = await aegisApi.getMessages(propThreadId);
+            setMessages(buildInitialMessages(msgs));
+          } catch {
+            /* transient — next beat reloads anyway */
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveReload, propThreadId]);
+
+  // Realtime-independent fallback for the narration. Supabase's postgres_changes
+  // socket can silently stall (dropped connection, an access token that expired
+  // while the tab sat open) and stop delivering INSERTs until a manual refresh
+  // forces a reconnect — which looked like "I asked a follow-up and nothing came
+  // back until I refreshed". Armed on each task send (followupPollNonce): poll
+  // the thread directly until its run settles, reloading messages AND recomputing
+  // taskWorking, so both the reply and the thinking dot land regardless of the
+  // socket. Cheap reads, self-limiting, and it stops shortly after the run ends.
+  useEffect(() => {
+    if (!liveReload || !propThreadId || followupPollNonce === 0) return;
+    let cancelled = false;
+    let sawRunning = false;
+    let settledStreak = 0;
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      // Don't fight an in-flight useChat stream (task threads don't use one, but
+      // guard anyway) — just reschedule.
+      if (!cancelled && !inFlightRef.current) {
+        try {
+          const [msgs, fixes] = await Promise.all([
+            aegisApi.getMessages(propThreadId),
+            supabase.from('project_security_fixes').select('status').eq('thread_id', propThreadId),
+          ]);
+          if (cancelled) return;
+          setMessages(buildInitialMessages(msgs));
+          const running = (fixes.data ?? []).some((r: { status: string }) => TASK_RUNNING_STATUSES.has(r.status));
+          const elapsed = Date.now() - startedAt;
+          if (running) {
+            setTaskWorking(true);
+            sawRunning = true;
+            settledStreak = 0;
+          } else {
+            settledStreak += 1;
+            // Only turn the dot OFF once the run has actually been seen running
+            // (so a read during the wake/boot gap — row not yet 'approved' —
+            // doesn't blink off the optimistic "starting…" state), or after the
+            // never-started grace window (wake genuinely failed / queued).
+            if (sawRunning || elapsed > FOLLOWUP_NEVER_STARTED_CAP_MS) setTaskWorking(false);
+          }
+        } catch {
+          /* transient — the next tick retries */
+        }
+      }
+      if (cancelled) return;
+      const elapsed = Date.now() - startedAt;
+      // Stop once: the run started and has been settled two ticks (terminal beat
+      // captured), OR it never started within the idle cap, OR the hard ceiling.
+      const done =
+        (sawRunning && settledStreak >= 2) ||
+        (!sawRunning && elapsed > FOLLOWUP_NEVER_STARTED_CAP_MS) ||
+        elapsed > FOLLOWUP_MAX_MS;
+      if (!done) timer = setTimeout(tick, sawRunning ? FOLLOWUP_POLL_MS : FOLLOWUP_STARTUP_POLL_MS);
+    };
+    // First tick fires quickly so the run state reconciles fast (the wake RPC
+    // has already flipped the fix row); cadence relaxes once it's running.
+    timer = setTimeout(tick, FOLLOWUP_STARTUP_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followupPollNonce, liveReload, propThreadId]);
+
+  // Slash-command execution for task threads. /status reads live run telemetry;
+  // /retry wakes the agent to re-attempt (reusing the follow-up wake path).
+  const runTaskCommand = useCallback(
+    async (raw: string) => {
+      if (!task) return;
+      const cmd = raw.trim().slice(1).split(/\s+/)[0].toLowerCase();
+      if (cmd === 'status') {
+        setCommandOutput('Checking status…');
+        try {
+          const s = await aegisApi.getTaskRunStatus(task.id, organizationId);
+          setCommandOutput(formatRunStatus(s));
+        } catch {
+          setCommandOutput('Could not fetch status right now.');
+        }
+        return;
+      }
+      if (cmd === 'retry') {
+        if (task.status === 'working') {
+          setCommandOutput('This task is already running — no need to retry.');
+          return;
+        }
+        setCommandOutput(null);
+        setSendError(null);
+        setTaskWorking(true);
+        setFollowupPollNonce((n) => n + 1);
+        setMessages((prev) => [
+          ...prev,
+          { id: `local-${Date.now()}`, role: 'user', parts: [{ type: 'text', text: RETRY_TEXT }] } as unknown as UIMessage,
+        ]);
+        try {
+          const res = await aegisApi.sendTaskMessage(task.id, organizationId, RETRY_TEXT);
+          if (res.queued) setTaskQueuedHint(true);
+        } catch {
+          setSendError('Something went wrong. Please try again.');
+        }
+        return;
+      }
+      setCommandOutput('Unknown command. Try /status or /retry.');
+    },
+    [task, organizationId, setMessages, setTaskWorking, setFollowupPollNonce],
+  );
+
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      // Fail closed while task-ness is unresolved. `task` derives from the
+      // parent's async listTasks(), so an existing thread with task=null might
+      // BE a task thread whose list simply hasn't loaded (direct URL load, or
+      // a failed fetch). Misrouting a task follow-up to the chat agent is the
+      // split-brain this feature exists to kill — block the send rather than
+      // fall through. Brand-new chats (no propThreadId) can't be task threads.
+      if (tasksLoading && propThreadId && !task) {
+        setSendError('Still loading this conversation — try again in a moment.');
+        return;
+      }
+      // Task threads: the message goes to the task's own agent (wake/queue), never the
+      // chat agent. Optimistic bubble here (useChat isn't involved on this path); the
+      // realtime reload reconciles it against the persisted row.
+      if (liveReload && task) {
+        setSendError(null);
+        // Slash commands (/status, /retry) are handled client-side, never sent
+        // to the agent as a message.
+        if (trimmed.startsWith('/')) {
+          void runTaskCommand(trimmed);
+          return;
+        }
+        setCommandOutput(null);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `local-${Date.now()}`,
+            role: 'user',
+            parts: [{ type: 'text', text: trimmed }],
+          } as unknown as UIMessage,
+        ]);
+        // Instant feedback: a follow-up wakes the agent, so flip the thinking
+        // dot + in-input Stop ON right now instead of waiting for a poll/realtime
+        // read to notice the fix row went running (the "mic stays for a few
+        // seconds" lag). The poll below reconciles — and won't blink it back off
+        // during the wake/boot gap.
+        setTaskWorking(true);
+        // Arm the poll fallback immediately so the reply lands even if realtime
+        // is dead (the "nothing until refresh" bug).
+        setFollowupPollNonce((n) => n + 1);
+        void aegisApi
+          .sendTaskMessage(task.id, organizationId, trimmed)
+          .then((res) => {
+            if (res.queued) setTaskQueuedHint(true);
+          })
+          .catch(() => setSendError('Something went wrong. Please try again.'));
+        return;
+      }
       // First send of a brand-new chat: notify the parent so the URL
       // updates and an optimistic "New chat" entry slides into the sidebar.
       // Done here (not in transport.fetch) because the threadId is now
@@ -487,7 +870,19 @@ export function ChatPane({
       clearError();
       void sendMessage({ text: trimmed });
     },
-    [sendMessage, clearError],
+    [
+      sendMessage,
+      clearError,
+      liveReload,
+      task,
+      tasksLoading,
+      propThreadId,
+      organizationId,
+      setMessages,
+      setTaskWorking,
+      setFollowupPollNonce,
+      runTaskCommand,
+    ],
   );
 
   const handleRemoveFromQueue = useCallback((id: string) => {
@@ -538,6 +933,30 @@ export function ChatPane({
     onThreadUpdatedRef.current?.();
   }, [stop]);
 
+  // Stop for a WORKER-side task run: the run isn't a useChat stream, so
+  // useChat.stop() can't touch it. Cancel the task instead — the same call
+  // TaskDetailPanel's Stop button makes — which rejects the task's in-flight
+  // agent fix rows; the worker aborts at its next step boundary and
+  // `taskWorking` flips off via the existing fix-row subscription. Best-effort:
+  // a failure is swallowed (the worker also halts on its own budget/stall).
+  const taskStoppingRef = useRef(false);
+  const handleTaskStop = useCallback(async () => {
+    if (!task || taskStoppingRef.current) return;
+    taskStoppingRef.current = true;
+    try {
+      await aegisApi.cancelTask(task.id, organizationId);
+    } catch {
+      /* best-effort — see above */
+    } finally {
+      taskStoppingRef.current = false;
+    }
+  }, [task, organizationId]);
+
+  // The composite "something is running" signal for the bottom input: a chat
+  // SSE stream OR the task's worker run. Drives the Stop affordance and the
+  // 'Add a follow-up' placeholder so task runs behave like chat streams.
+  const taskRunActive = liveReload && taskWorking;
+
   // Show the thinking dot whenever the stream is in flight and there's no
   // self-evident visible affordance for the user. Suppressed only by
   // (a) actively-typing text content — the typing animation IS the
@@ -547,6 +966,9 @@ export function ChatPane({
   // visible action — those gaps fall into the default-true branch so the
   // dot reappears between actions instead of going dark.
   const showThinkingDot = useMemo(() => {
+    // A task worker is actively running (it narrates via realtime, not useChat) —
+    // show the dot between its beats so a task chat "thinks" like a normal chat.
+    if (taskWorking) return true;
     if (status === 'submitted') return true;
     if (status !== 'streaming') return false;
     const last = messages[messages.length - 1] as any;
@@ -559,7 +981,7 @@ export function ChatPane({
     const lastToolName = lastPart?.toolName ?? (lastPartType.startsWith('tool-') ? lastPartType.replace(/^tool-/, '') : '');
     if ((lastToolName === 'request_fix' || lastToolName === 'revise_fix') && lastPart?.state !== 'output-error') return false;
     return true;
-  }, [status, messages]);
+  }, [status, messages, taskWorking]);
 
   // Index of the latest assistant error message — only that bubble shows the
   // Regenerate button so stacked older errors stay read-only.
@@ -662,7 +1084,11 @@ export function ChatPane({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {messagesLoading ? (
+          <ChatSkeleton />
+        ) : (
         <div className="py-4">
+          {task && <TaskHeader task={task} onOpenDetails={onOpenTaskDetails} />}
           {messages.map((m, i) => (
             <MessageBubble
               key={m.id}
@@ -692,22 +1118,42 @@ export function ChatPane({
           )}
           <div ref={bottomRef} />
         </div>
+        )}
       </div>
       <div className="px-4 pb-4">
         <div className="mx-auto max-w-3xl">
           <ChatTodos messages={messages} streaming={status === 'streaming'} />
           <SendQueuePanel queue={sendQueue} onRemove={handleRemoveFromQueue} />
+          {taskQueuedHint && (
+            <div className="mb-2 px-4 text-xs text-foreground-secondary">
+              Queued — I'll pick this up when the current run finishes.
+            </div>
+          )}
+          {commandOutput && (
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-border bg-background-subtle/50 px-3 py-2 text-xs text-foreground-secondary">
+              <span className="font-mono">{commandOutput}</span>
+              <button
+                type="button"
+                onClick={() => setCommandOutput(null)}
+                className="shrink-0 text-foreground-secondary hover:text-foreground"
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <div className="rounded-2xl bg-background-card border border-border">
             <ChatInput
               onSubmit={handleSubmit}
-              placeholder={isStreaming || sendQueue.length > 0 ? 'Add a follow-up' : 'Ask anything'}
+              placeholder={isStreaming || taskRunActive || sendQueue.length > 0 ? 'Add a follow-up' : 'Ask anything'}
               autoFocus
               models={enabledModels}
               selectedModelId={selectedModelId}
               onSelectModel={setSelectedModelId}
               modelsLoading={modelsLoading}
-              isStreaming={isStreaming}
-              onStop={handleStop}
+              isStreaming={isStreaming || taskRunActive}
+              onStop={taskRunActive ? handleTaskStop : handleStop}
+              slashCommands={liveReload && task ? TASK_SLASH_COMMANDS : undefined}
             />
           </div>
         </div>

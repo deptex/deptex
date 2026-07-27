@@ -1,14 +1,16 @@
 FROM node:20-slim
 
 # Base toolchain: git for clone, curl for tooling install, python3 + pip for
-# Python projects (M6), Go for Go projects (M6). Stretch languages are added
-# in M8. JS/TS only is exercised end-to-end in M5.
+# Python projects, ruby for Ruby projects (the agent's `ruby -c <file>` syntax
+# check — without it the verify step fails "ruby: not found"), Go below. JS/TS
+# uses the bundled node.
 RUN apt-get update && apt-get install -y \
   git \
   curl \
   python3 \
   python3-pip \
   python3-venv \
+  ruby \
   ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 

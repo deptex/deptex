@@ -8,6 +8,8 @@ export type FindingTypeIconKind =
   | 'license'
   | 'iac'
   | 'container'
+  | 'base_image'
+  | 'dataflow'
   | 'dast';
 
 interface FindingTypeIconProps {
@@ -64,7 +66,7 @@ export function FindingTypeIcon({ type, size = 18, className }: FindingTypeIconP
       </svg>
     );
   }
-  if (type === 'container') {
+  if (type === 'container' || type === 'base_image') {
     return (
       <svg className={cls} style={dim} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="8" width="18" height="11" rx="1.5" />
@@ -72,6 +74,19 @@ export function FindingTypeIcon({ type, size = 18, className }: FindingTypeIconP
         <rect x="11" y="11" width="3" height="3" />
         <rect x="16" y="11" width="3" height="3" />
         <path d="M3 8c2 0 3-2 3-2h12s1 2 3 2" />
+      </svg>
+    );
+  }
+  if (type === 'dataflow') {
+    // Branching arrows — a tainted value flowing through the code to a sink.
+    return (
+      <svg className={cls} style={dim} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="5" cy="6" r="2" />
+        <circle cx="5" cy="18" r="2" />
+        <circle cx="19" cy="12" r="2" />
+        <path d="M7 6h4a4 4 0 0 1 4 4v0" />
+        <path d="M7 18h4a4 4 0 0 0 4-4v0" />
+        <path d="M15 12h2" />
       </svg>
     );
   }

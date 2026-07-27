@@ -3,8 +3,7 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from '../lib/active-extraction';
 import { supabase } from '../lib/supabase';
-import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
-import { signApprovalToken } from '../lib/aegis-v3/approval-token';
+import { persistPlanForFix } from '../lib/aegis-v3/fix-request';
 import {
   createInstallationToken,
   getBranchSha,
@@ -82,8 +81,11 @@ interface FixRow {
   rejected_at: string | null;
   pr_url: string | null;
   pr_number: number | null;
+  pr_branch: string | null;
   diff_summary: string | null;
   error_message: string | null;
+  error_category: string | null;
+  failure_details: Record<string, unknown> | null;
   created_at: string;
   triggered_by: string;
   osv_id: string | null;
@@ -114,8 +116,11 @@ function shapeFixRow(row: FixRow) {
     rejectedAt: row.rejected_at,
     prUrl: row.pr_url,
     prNumber: row.pr_number,
+    prBranch: row.pr_branch,
     diffSummary: row.diff_summary,
     errorMessage: row.error_message,
+    errorCategory: row.error_category,
+    failureDetails: row.failure_details ?? null,
     createdAt: row.created_at,
     threadId: row.thread_id,
   };
@@ -224,13 +229,16 @@ async function loadFixRow(fixId: string): Promise<FixRow | null> {
   const { data } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('id', fixId)
     .maybeSingle();
   return (data as FixRow | null) ?? null;
 }
 
+// Generate + persist a plan onto an existing fix row. Thin wrapper over the
+// shared persistPlanForFix helper (kept for the two call sites below + their
+// signature). On planner throw it marks the row failed and rethrows.
 async function runPlanForRow(
   fixId: string,
   organizationId: string,
@@ -239,58 +247,14 @@ async function runPlanForRow(
   findingId: string,
   triggeredByUserId: string,
 ): Promise<{ status: FixStatus; plan: FixPlan; baseSha: string; baseBranch: string }> {
-  let result;
-  try {
-    result = await generateFixPlan({
-      organizationId,
-      projectId,
-      findingType,
-      findingId,
-      triggeredByUserId,
-    });
-  } catch (err: any) {
-    await supabase
-      .from('project_security_fixes')
-      .update({
-        status: 'failed',
-        error_message: `Plan generation failed: ${err?.message ?? 'unknown error'}`,
-        completed_at: new Date().toISOString(),
-      })
-      .eq('id', fixId);
-    throw err;
-  }
-
-  // Some models (Qwen3, certain OpenAI configs) always populate optional
-  // schema fields with placeholders rather than omitting them. So
-  // refusal: { reason: "null" } shows up on perfectly fine plans. Detect
-  // sentinel values and strip the refusal before persisting; otherwise the
-  // PlanCard renders the refusal layout on what's actually an approvable plan.
-  const SENTINEL_REASONS = new Set(['', 'null', 'none', 'n/a', 'na', 'no', 'false']);
-  const rawReason = result.plan.refusal?.reason?.trim().toLowerCase();
-  const isRealRefusal = !!result.plan.refusal && !!rawReason && !SENTINEL_REASONS.has(rawReason);
-  const finalPlan: FixPlan = isRealRefusal
-    ? result.plan
-    : { ...result.plan, refusal: undefined };
-
-  const generatedAt = new Date().toISOString();
-  const status: FixStatus = isRealRefusal ? 'failed' : 'awaiting_approval';
-  const approvalToken = isRealRefusal ? null : signApprovalToken(fixId, organizationId, generatedAt);
-
-  await supabase
-    .from('project_security_fixes')
-    .update({
-      status,
-      plan: finalPlan,
-      plan_generated_at: generatedAt,
-      plan_base_sha: result.baseSha,
-      plan_base_branch: result.baseBranch,
-      approval_token: approvalToken,
-      error_message: isRealRefusal ? `Refusal: ${finalPlan.refusal?.reason}` : null,
-      completed_at: isRealRefusal ? generatedAt : null,
-    })
-    .eq('id', fixId);
-
-  return { status, plan: finalPlan, baseSha: result.baseSha, baseBranch: result.baseBranch };
+  return persistPlanForFix({
+    fixId,
+    organizationId,
+    projectId,
+    findingType,
+    findingId,
+    triggeredByUserId,
+  });
 }
 
 router.post('/request', async (req: AuthRequest, res) => {
@@ -443,7 +407,7 @@ router.get('/pending', async (req: AuthRequest, res) => {
   const { data, error } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('organization_id', organizationId)
     .in('status', ['planning', 'awaiting_approval'])
@@ -475,7 +439,7 @@ router.get('/by-thread/:threadId', async (req: AuthRequest, res) => {
   const { data, error } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('thread_id', threadId)
     .order('created_at', { ascending: true });
@@ -503,6 +467,111 @@ router.get('/:fixId', async (req: AuthRequest, res) => {
   return res.json({ fix: await shapeFixRowWithFinding(row) });
 });
 
+// npm-family lockfiles are machine-REGENERATED by the worker (`npm install
+// --package-lock-only`), so their thousands-of-lines diff is noise the user
+// didn't author — hide it (name + stats only). Other ecosystems' lockfiles
+// (Gemfile.lock, go.sum, Cargo.lock, composer.lock) are NOT regenerated by us;
+// if one is in the PR the agent edited it deliberately, so show it as a real
+// diff (the Changes tab collapses it if it's long). Mirrors the fix-worker's
+// isNoisyFile.
+const NOISY_PATCH_RE = /(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
+const PATCH_CHAR_CAP = 12000;
+
+/**
+ * Net change-set for a fix's PR: the cumulative files list from GitHub —
+ * authoritative across ALL commits (amends from resumed runs included) — so
+ * the panel shows "initial vs now" per file instead of every intermediate
+ * edit. Same guard as GET /:fixId.
+ */
+router.get('/:fixId/changes', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { data: row } = await supabase
+    .from('project_security_fixes')
+    .select('id, organization_id, project_id, pr_number, pr_url, pr_repo_full_name')
+    .eq('id', req.params.fixId)
+    .maybeSingle();
+  if (!row) return res.status(404).json({ error: 'Fix not found' });
+  if (!(await isOrgMember(row.organization_id, userId))) {
+    return res.status(403).json({ error: 'Not a member of this organization' });
+  }
+
+  // No PR yet (run still working, or it failed before pushing): empty set.
+  if (!row.pr_number || !row.pr_repo_full_name) {
+    return res.json({ prNumber: null, prUrl: null, files: [] });
+  }
+
+  try {
+    // Installation token, resolved the same way the staleness route above and
+    // insertAgentFixRow do: project_repositories.installation_id by project,
+    // falling back to the org-level installation.
+    const { data: repo } = await supabase
+      .from('project_repositories')
+      .select('installation_id')
+      .eq('project_id', row.project_id)
+      .maybeSingle();
+    const installationId =
+      (repo as any)?.installation_id ??
+      (
+        await supabase
+          .from('organizations')
+          .select('github_installation_id')
+          .eq('id', row.organization_id)
+          .single()
+      ).data?.github_installation_id;
+    if (!installationId) {
+      return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+    }
+    const token = await createInstallationToken(String(installationId));
+
+    // Cumulative PR files. v1 caps at 2 pages (200 files) — an agent fix PR
+    // beyond that is pathological; the panel would truncate the list anyway.
+    const rawFiles: any[] = [];
+    for (let page = 1; page <= 2; page++) {
+      const resp = await fetch(
+        `https://api.github.com/repos/${row.pr_repo_full_name}/pulls/${row.pr_number}/files?per_page=100&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'Deptex-App',
+          },
+        },
+      );
+      if (!resp.ok) {
+        return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+      }
+      const batch = (await resp.json()) as any[];
+      if (!Array.isArray(batch)) break;
+      rawFiles.push(...batch);
+      if (batch.length < 100) break;
+    }
+
+    return res.json({
+      prNumber: row.pr_number,
+      prUrl: row.pr_url ?? null,
+      files: rawFiles.map((f: any) => {
+        const lockfile = NOISY_PATCH_RE.test(String(f.filename ?? ''));
+        // GitHub omits `patch` for large/binary files — pass null through.
+        let patch: string | null = typeof f.patch === 'string' ? f.patch : null;
+        if (patch && lockfile) patch = null;
+        if (patch && patch.length > PATCH_CHAR_CAP) {
+          patch = `${patch.slice(0, PATCH_CHAR_CAP)}\n… (truncated)`;
+        }
+        return {
+          path: f.filename as string,
+          status: f.status as string,
+          additions: (f.additions as number) ?? 0,
+          deletions: (f.deletions as number) ?? 0,
+          patch,
+          lockfile,
+        };
+      }),
+    });
+  } catch {
+    // Token mint or network failure — the frontend keeps its previous view.
+    return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+  }
+});
 
 router.get('/:fixId/staleness', async (req: AuthRequest, res) => {
   const userId = req.user!.id;

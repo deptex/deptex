@@ -88,3 +88,42 @@ describe('fix-worker llm.getLanguageModelForOrg', () => {
     await expect(getLanguageModelForOrg(supa, 'org-x')).rejects.toThrow(/org not found/);
   });
 });
+
+import { contextWindowFor, resolveOrgModel } from '../llm';
+
+describe('fix-worker llm.contextWindowFor', () => {
+  test('maps each provider to a conservative window', () => {
+    expect(contextWindowFor('anthropic', 'claude-sonnet-4-5-20250929')).toBe(200_000);
+    expect(contextWindowFor('openai', 'gpt-4o')).toBe(128_000);
+    expect(contextWindowFor('openai', 'gpt-4.1')).toBe(200_000);
+    expect(contextWindowFor('google', 'gemini-2.5-pro')).toBe(1_000_000);
+    expect(contextWindowFor('deepinfra', 'deepseek-ai/DeepSeek-V3.1')).toBe(128_000);
+  });
+});
+
+describe('fix-worker llm.resolveOrgModel', () => {
+  const ORIGINAL_ENV = { ...process.env };
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = 'sk-test-anthropic';
+    process.env.OPENAI_API_KEY = 'sk-test-openai';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  test('returns the resolved model name + its context window', async () => {
+    const supa = fakeSupabase({ default_ai_provider: 'anthropic', default_model: 'claude-sonnet-4-5-20250929' });
+    const r = await resolveOrgModel(supa, 'org-x');
+    expect(r.provider).toBe('anthropic');
+    expect(r.modelName).toBe('claude-sonnet-4-5-20250929');
+    expect(r.contextWindow).toBe(200_000);
+    expect(r.model).toBeTruthy();
+  });
+
+  test('an override id wins and carries its own window', async () => {
+    const supa = fakeSupabase({ default_ai_provider: 'anthropic', default_model: null });
+    const r = await resolveOrgModel(supa, 'org-x', 'gpt-4o');
+    expect(r.provider).toBe('openai');
+    expect(r.contextWindow).toBe(128_000);
+  });
+});

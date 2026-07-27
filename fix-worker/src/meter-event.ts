@@ -12,6 +12,20 @@ export interface FixTaskTiming {
   projectId?: string;
   startedAtMs: number;
   endedAtMs?: number;
+  /** Claim-time run_seq of the fix row (0 = first run; +1 per user wake). */
+  runSeq?: number;
+}
+
+/**
+ * Per-run billing dedup key. Run 0 keeps the historical `:final` key: a
+ * standalone fix that recovery-retries ACROSS the worker deploy must not bill
+ * under two different key formats (the old worker already emitted `:final`
+ * for it — a new `:run-0` key would double-bill). Only user wakes (run_seq>0)
+ * move to the per-run key, so each wake bills exactly once and recovery
+ * re-claims of the SAME run still dedup.
+ */
+export function meterIdempotencyKey(taskId: string, runSeq: number | undefined): string {
+  return runSeq && runSeq > 0 ? `fix-worker:${taskId}:run-${runSeq}` : `fix-worker:${taskId}:final`;
 }
 
 export async function postFixTaskMeterEvent(timing: FixTaskTiming): Promise<void> {
@@ -35,7 +49,7 @@ export async function postFixTaskMeterEvent(timing: FixTaskTiming): Promise<void
       resource_type: 'fix_task',
       resource_id: timing.taskId,
     },
-    idempotency_key: `fix-worker:${timing.taskId}:final`,
+    idempotency_key: meterIdempotencyKey(timing.taskId, timing.runSeq),
   };
   if (timing.projectId) body.project_id = timing.projectId;
 

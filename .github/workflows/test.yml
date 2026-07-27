@@ -159,6 +159,21 @@ jobs:
         working-directory: depscanner
         run: npm run test:snapshot-runner
 
+      # Aegis Task rollup trigger (recompute_aegis_task_status) against PGLite +
+      # the phase9z migration. In-memory, <2s, no Docker. This is the only place
+      # the trigger is exercised (jest never transitions fix status).
+      - name: Run Aegis Task rollup trigger test
+        working-directory: depscanner
+        run: npm run test:aegis-task-rollup-pglite
+
+      # Wake-the-task-agent RPC (wake_agent_fix) + the run-N billing-meter dedup
+      # against the real deduct_balance, on PGLite + the wake_task_agent
+      # migration. The only place the wake reset / re-open housekeeping and the
+      # meter idempotency are exercised against real SQL.
+      - name: Run wake_agent_fix + meter dedup test
+        working-directory: depscanner
+        run: npm run test:wake-agent-fix-pglite
+
   depscanner-integration:
     # PGLite integration suites. Each boots an in-memory PGLite, loads
     # backend/database/schema.sql, and exercises the RPCs / migrations / storage

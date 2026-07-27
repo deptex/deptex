@@ -9,8 +9,8 @@
  * because the connect flow doesn't capture it — these helpers expose the
  * list endpoints the picker needs.
  *
- * The REST bodies mirror the Aegis tool closures in lib/aegis/tools/external.ts;
- * those tools now delegate here so there is one implementation.
+ * This is the single tracker-filing implementation (REST routes + the Aegis
+ * jira/linear tools both call these helpers).
  */
 
 import { supabase } from './supabase';

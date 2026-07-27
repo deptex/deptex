@@ -4,7 +4,10 @@ import { AlertCircle, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 import { PlanCard, PlanCardSkeleton } from './PlanCard';
+import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
+import { ChangeCard } from './ChangeCard';
+import { TaskStepLine } from './TaskStepLine';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
 import type { TopUpReason } from '../billing/TopUpModal';
@@ -97,6 +100,21 @@ export function MessageBubble({
       elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} organizationId={organizationId} />);
       return;
     }
+    // Fix-worker tool-use step — a gray "did this" line.
+    if (part.type === 'step') {
+      flushTools();
+      elements.push(
+        <TaskStepLine
+          key={`step-${i}`}
+          icon={part.icon}
+          label={part.label ?? ''}
+          command={part.command}
+          diff={part.diff}
+          output={part.output}
+        />,
+      );
+      return;
+    }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
       // set_todos is pure UI bookkeeping for the ChatTodos strip — it
@@ -113,6 +131,7 @@ export function MessageBubble({
       // leaving the chat with a permanent "Generating plan…" skeleton.
       const isError = part.state === 'output-error' || !!output?.error;
       const resolved = part.state === 'output-available' && output?.fixId;
+      const failedFix = !!(output as { failed?: boolean } | undefined)?.failed;
 
       if ((toolName === 'request_fix' || toolName === 'revise_fix') && !isError) {
         flushTools();
@@ -132,6 +151,41 @@ export function MessageBubble({
         return;
       }
 
+      // apply_fix: a successful change renders the ChangeCard (the applied change
+      // + PR link). Failures no longer post an apply_fix part at all — the worker
+      // narrates a plain failure step line (no card, no raw error) — so a stray
+      // failed:true part from old history simply renders nothing.
+      if (toolName === 'apply_fix' && !isError) {
+        flushTools();
+        if (!failedFix) {
+          elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
+        }
+        return;
+      }
+
+      // create_task renders the inline Create-Task card (Accept / Decline).
+      // Streaming (no taskId yet) shows the same skeleton chrome as a plan.
+      if (toolName === 'create_task' && !isError) {
+        flushTools();
+        const taskOut = part.output as
+          | { taskId?: string; description?: string; targets?: Array<{ findingType: string; label: string }> }
+          | undefined;
+        if (part.state === 'output-available' && taskOut?.taskId) {
+          elements.push(
+            <CreateTaskCard
+              key={`task-${i}`}
+              taskId={taskOut.taskId}
+              description={taskOut.description}
+              targets={taskOut.targets}
+              organizationId={organizationId}
+            />,
+          );
+        } else {
+          elements.push(<PlanCardSkeleton key={`task-skel-${i}`} />);
+        }
+        return;
+      }
+
       toolBuffer.push({ toolName, state: mapState(part.state) });
 
       if (resolved && toolName === 'approve_fix') {
@@ -146,8 +200,12 @@ export function MessageBubble({
   // skip the wrapping bubble entirely instead of rendering empty padding.
   if (!isUser && !error && elements.length === 0) return null;
 
+  // Step-only messages (the worker's tool-use lines) are stacked tight so a run
+  // of them reads as one activity list, not a column of spaced bubbles.
+  const isStepOnly = parts.length > 0 && parts.every((p: any) => p.type === 'step');
+
   return (
-    <div className="px-4 py-2">
+    <div className={isStepOnly ? 'px-4 py-0.5' : 'px-4 py-2'}>
       <div className="mx-auto max-w-3xl">
         <div className="space-y-2">{elements}</div>
       </div>

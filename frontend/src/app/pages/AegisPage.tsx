@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
-import { aegisApi, type AegisThread } from '../../lib/aegis-api';
+import { aegisApi, type AegisThread, type AegisTask } from '../../lib/aegis-api';
 import type { Organization, RolePermissions } from '../../lib/api';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
@@ -8,6 +8,7 @@ import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
 import { FixPanelProvider } from '../../components/aegis/FixPanelContext';
 import { FixPanelHost } from '../../components/aegis/FixPanelHost';
+import { TaskDetailPanel } from '../../components/aegis/TaskDetailPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -43,6 +44,32 @@ export default function AegisPage() {
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Task-chats render their fixes inline (as live narration in the conversation),
+  // so the right-side fix panel is suppressed for them, and the active task is
+  // passed to ChatPane for its header.
+  const [tasks, setTasks] = useState<AegisTask[]>([]);
+  const activeTask = activeThreadId
+    ? tasks.find((t) => t.threadId === activeThreadId) ?? null
+    : null;
+  const isTaskThread = !!activeTask;
+  // The task sidebar (Task / Changes tabs). It's the task's workspace, so it
+  // opens by default on a task thread and closes on non-task threads. Re-evaluated
+  // on every thread switch (and once tasks load) so it never bleeds across tasks;
+  // a manual close persists until the next switch.
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  useEffect(() => {
+    setTaskPanelOpen(isTaskThread);
+  }, [activeThreadId, isTaskThread]);
+
+  // Hold the task panel closed until ChatPane reports its history loaded, so it
+  // doesn't sit open over the chat's loading skeleton. Reset on every thread
+  // switch; ChatPane's onFirstLoad flips it true once the conversation is on
+  // screen, and the panel slides in then.
+  const [chatReady, setChatReady] = useState(false);
+  useEffect(() => {
+    setChatReady(false);
+  }, [activeThreadId]);
+  const handleChatLoaded = useCallback(() => setChatReady(true), []);
 
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just
@@ -83,6 +110,40 @@ export default function AegisPage() {
     if (!orgId || !canUseAegis) return;
     void refreshThreads();
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, canUseAegis]);
+
+  // Track which threads are task-chats (to suppress the fix panel for them).
+  // `tasksReady` marks the first successful listTasks resolve: until then a
+  // thread's task-ness is UNKNOWN, and ChatPane must fail a send closed rather
+  // than route a task follow-up to the chat agent (the split-brain). A load
+  // failure is retried once after a short delay instead of being swallowed
+  // silently forever.
+  const [tasksReady, setTasksReady] = useState(false);
+  useEffect(() => {
+    if (!orgId || !canUseAegis) return;
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const load = async (isRetry = false) => {
+      try {
+        const list = await aegisApi.listTasks(orgId);
+        if (cancelled) return;
+        setTasks(list);
+        setTasksReady(true);
+      } catch (err) {
+        console.error('[aegis] listTasks failed', err);
+        if (!isRetry && !cancelled) {
+          retryTimer = window.setTimeout(() => void load(true), 2000);
+        }
+      }
+    };
+    void load();
+    const handler = () => void load();
+    window.addEventListener('aegis:taskListChanged', handler);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      window.removeEventListener('aegis:taskListChanged', handler);
+    };
   }, [orgId, canUseAegis]);
 
   const handleSelect = useCallback((threadId: string) => {
@@ -191,13 +252,33 @@ export default function AegisPage() {
                 displayName={displayName}
                 onThreadCreated={handleThreadCreated}
                 onThreadUpdated={handleThreadUpdated}
+                liveReload={isTaskThread}
+                task={activeTask}
+                tasksLoading={!tasksReady}
+                onOpenTaskDetails={() => setTaskPanelOpen(true)}
                 canManageBilling={userPermissions?.manage_billing === true}
                 userEmail={user?.email ?? null}
+                onFirstLoad={handleChatLoaded}
               />
             </>
           )}
         </div>
-        <FixPanelHost />
+        {/* Hold BOTH right-panels until the task list resolves. Before then a
+            task thread reads as non-task (activeTask is null until listTasks
+            lands), so the fix panel would flash open and then get swapped for
+            the task panel — the "sidebar loads, closes, reloads" glitch. Gating
+            on tasksReady means nothing shows on the right until we know which
+            panel belongs there; the task panel then waits on chatReady too, so
+            the order is always chat first, then sidebar. */}
+        {tasksReady && !isTaskThread && <FixPanelHost />}
+        {tasksReady && isTaskThread && (
+          <TaskDetailPanel
+            task={activeTask}
+            open={taskPanelOpen && chatReady}
+            onClose={() => setTaskPanelOpen(false)}
+            onOpen={() => setTaskPanelOpen(true)}
+          />
+        )}
       </div>
       <SearchChatsModal
         open={searchOpen}

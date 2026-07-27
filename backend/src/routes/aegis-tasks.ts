@@ -1,0 +1,225 @@
+import express from 'express';
+import { authenticateUser, type AuthRequest } from '../middleware/auth';
+import { userHasOrgPermission } from '../lib/permissions';
+import {
+  acceptTask,
+  cancelTask,
+  declineTask,
+  ensureTaskThread,
+  findOpenTaskForFinding,
+  getTask,
+  getTaskRunStatus,
+  listTasks,
+  proposeTaskFromFinding,
+  sendTaskFollowup,
+} from '../lib/aegis-v3/tasks';
+
+/** Hard cap on a follow-up message: long enough for a pasted stack trace, short
+ *  enough that one message can't blow the agent's context on the first step. */
+const MAX_FOLLOWUP_CHARS = 24_000;
+import { AEGIS_TASK_FINDING_TYPES, type AegisTaskFindingType } from '../lib/aegis-v3/task-types';
+
+const router = express.Router();
+router.use(authenticateUser);
+
+// Map the lib's thrown messages onto HTTP status codes.
+function statusForError(message: string): number {
+  if (message === 'Task not found' || message === 'Task not in current organization') return 404;
+  if (message.includes('cannot be accepted') || message.includes('cannot be declined')) return 409;
+  return 500;
+}
+
+/**
+ * Send-to-Aegis: create a task from a fixable finding. Returns {taskId, threadId}
+ * for a confirm-in-task-chat (consistent consent — the task is created in
+ * `proposed` state; the user accepts in the task-chat). Dedups to an existing
+ * open task for the same finding.
+ */
+router.post('/', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId, projectId, findingType, findingKey, osvId, findingHandle, label } = req.body ?? {};
+
+  if (!organizationId || !projectId || !findingType || !findingKey) {
+    return res
+      .status(400)
+      .json({ error: 'organizationId, projectId, findingType, and findingKey are required' });
+  }
+  if (!AEGIS_TASK_FINDING_TYPES.includes(findingType)) {
+    return res
+      .status(400)
+      .json({ error: `findingType must be one of ${AEGIS_TASK_FINDING_TYPES.join(', ')}` });
+  }
+  // semgrep/secret need the location handle (their finding_key is per-rule).
+  if ((findingType === 'semgrep' || findingType === 'secret') && !findingHandle) {
+    return res.status(400).json({ error: 'findingHandle (file:line) is required for semgrep/secret findings' });
+  }
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+
+  try {
+    const handle = typeof findingHandle === 'string' ? findingHandle : undefined;
+    const existing = await findOpenTaskForFinding({
+      orgId: organizationId,
+      projectId,
+      findingType,
+      findingKey,
+      findingHandle: handle,
+    });
+    if (existing) {
+      return res.status(200).json({ taskId: existing.taskId, threadId: existing.threadId, deduped: true });
+    }
+
+    const targetLabel = (typeof label === 'string' && label.trim()) || String(findingKey);
+    const { taskId, threadId } = await proposeTaskFromFinding({
+      orgId: organizationId,
+      projectId,
+      createdBy: userId,
+      description: `Fix ${targetLabel}`,
+      target: {
+        findingType: findingType as AegisTaskFindingType,
+        findingKey,
+        osvId: typeof osvId === 'string' ? osvId : undefined,
+        findingHandle: handle,
+        projectId,
+        label: targetLabel,
+      },
+    });
+    return res.status(201).json({ taskId, threadId });
+  } catch (err: any) {
+    const message = err?.message ?? 'Failed to create task';
+    return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/** The sidebar pile, newest first. Tenant-scoped by organizationId. */
+router.get('/', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const organizationId = (req.query.organizationId as string | undefined) ?? '';
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'interact_with_aegis'))) {
+    return res.status(403).json({ error: 'You do not have permission to view Aegis' });
+  }
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const offset = req.query.offset ? Number(req.query.offset) : undefined;
+  try {
+    const tasks = await listTasks(organizationId, { limit, offset });
+    return res.json({ tasks });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'Failed to list tasks' });
+  }
+});
+
+/** A single task. Asserts the task belongs to a caller org. */
+router.get('/:taskId', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const organizationId = (req.query.organizationId as string | undefined) ?? '';
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'interact_with_aegis'))) {
+    return res.status(403).json({ error: 'You do not have permission to view Aegis' });
+  }
+  const task = await getTask(req.params.taskId, organizationId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  return res.json({ task });
+});
+
+/**
+ * Live run status for the task chat's context meter + /status: the current (or
+ * most recent) agent run's fix status, step count, and context-window fill.
+ */
+router.get('/:taskId/run-status', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const organizationId = (req.query.organizationId as string | undefined) ?? '';
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'interact_with_aegis'))) {
+    return res.status(403).json({ error: 'You do not have permission to view Aegis' });
+  }
+  const status = await getTaskRunStatus(req.params.taskId, organizationId);
+  if (!status) return res.status(404).json({ error: 'Task not found' });
+  return res.json(status);
+});
+
+/** Accept a proposed task — authorizes the whole fix job. */
+router.patch('/:taskId/accept', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId } = req.body ?? {};
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    const { threadId } = await acceptTask({ taskId: req.params.taskId, userId, organizationId });
+    return res.json({ threadId });
+  } catch (err: any) {
+    const message = err?.message ?? 'Failed to accept task';
+    return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/** Decline a proposed task. */
+router.patch('/:taskId/decline', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId } = req.body ?? {};
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    await declineTask({ taskId: req.params.taskId, userId, organizationId });
+    return res.json({ success: true });
+  } catch (err: any) {
+    const message = err?.message ?? 'Failed to decline task';
+    return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/**
+ * Follow-up message on a task thread: persist it, then wake the SAME agent to
+ * resume (amend its PR / act on the instruction). Never routes to the chat agent.
+ */
+router.post('/:taskId/message', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId, message } = req.body ?? {};
+  if (!organizationId || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'organizationId and message are required' });
+  }
+  if (message.length > MAX_FOLLOWUP_CHARS) {
+    return res
+      .status(400)
+      .json({ error: `Message is too long (max ${MAX_FOLLOWUP_CHARS.toLocaleString()} characters) — please summarize.` });
+  }
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    const result = await sendTaskFollowup({
+      taskId: req.params.taskId,
+      userId,
+      organizationId,
+      message: message.trim(),
+    });
+    return res.json(result);
+  } catch (err: any) {
+    const message2 = err?.message ?? 'Failed to send message';
+    return res.status(statusForError(message2)).json({ error: message2 });
+  }
+});
+
+/** Stop a running task — rejects its in-flight agent fixes so the worker aborts. */
+router.post('/:taskId/cancel', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId } = req.body ?? {};
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    const { cancelled } = await cancelTask({ taskId: req.params.taskId, userId, organizationId });
+    return res.json({ success: true, cancelled });
+  } catch (err: any) {
+    const message = err?.message ?? 'Failed to cancel task';
+    return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+export default router;

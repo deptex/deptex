@@ -8,41 +8,7 @@ import { ProjectEmbedCard } from './ProjectEmbedCard';
 import { TeamEmbedCard } from './TeamEmbedCard';
 import { MemberEmbedCard } from './MemberEmbedCard';
 import { MembersTable } from './MembersTable';
-
-// Custom theme: near-white base text, oneDark token colors, transparent bg
-const codeTheme: Record<string, React.CSSProperties> = {
-  'pre[class*="language-"]': { color: '#e4e4e7', background: 'transparent' },
-  'code[class*="language-"]': { color: '#e4e4e7' },
-  comment: { color: '#636d83', fontStyle: 'italic' },
-  prolog: { color: '#636d83' },
-  doctype: { color: '#636d83' },
-  cdata: { color: '#636d83' },
-  punctuation: { color: '#9ca3af' },
-  property: { color: '#e06c75' },
-  tag: { color: '#e06c75' },
-  boolean: { color: '#d19a66' },
-  number: { color: '#d19a66' },
-  constant: { color: '#d19a66' },
-  symbol: { color: '#d19a66' },
-  deleted: { color: '#e06c75' },
-  selector: { color: '#98c379' },
-  string: { color: '#98c379' },
-  char: { color: '#98c379' },
-  builtin: { color: '#98c379' },
-  inserted: { color: '#98c379' },
-  operator: { color: '#56b6c2' },
-  url: { color: '#56b6c2' },
-  'attr-name': { color: '#d19a66' },
-  'attr-value': { color: '#98c379' },
-  atrule: { color: '#c678dd' },
-  keyword: { color: '#c678dd' },
-  function: { color: '#61afef' },
-  'class-name': { color: '#e5c07b' },
-  regex: { color: '#56b6c2' },
-  variable: { color: '#e06c75' },
-  bold: { fontWeight: 'bold' },
-  italic: { fontStyle: 'italic' },
-};
+import { codeTheme } from './codeTheme';
 
 interface MarkdownRendererProps {
   /** When set with org id, parses inline `<project>…</project>` / `<team>…</team>` tokens into cards. */
@@ -95,16 +61,24 @@ function dedentProse(content: string): string {
   const lines = content.split('\n');
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
       continue;
     }
     if (inFence) continue;
+    // Weak models emit `\`x\`` — an intended inline-code span with backslash-
+    // escaped backticks inside it. CommonMark reads the stray backticks as new
+    // delimiters and ends up highlighting half the sentence (the "weird
+    // highlights" bug). Unescaping \` → ` turns it back into a valid
+    // (double-)backtick span, e.g. (`\`ping\``) → (``ping``).
+    line = line.replace(/\\`/g, '`');
     // Preserve list items and blockquotes — they need their leading marker
     // (and modest indent) to render correctly.
-    if (/^(\s{0,3}[-*+]\s|\s{0,3}\d+\.\s|\s{0,3}>)/.test(line)) continue;
-    lines[i] = line.replace(/^[ \t]+/, '');
+    if (!/^(\s{0,3}[-*+]\s|\s{0,3}\d+\.\s|\s{0,3}>)/.test(line)) {
+      line = line.replace(/^[ \t]+/, '');
+    }
+    lines[i] = line;
   }
   return lines.join('\n');
 }

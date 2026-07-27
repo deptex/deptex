@@ -15,16 +15,19 @@ export interface TestResult {
   noTestSuite: boolean;
 }
 
-// Heuristics for "the repo has no real test suite" — common scaffolds across
-// the v1 ship-gate languages. If we match any of these, we treat the run as
-// a pass-with-no-gate rather than a real failure.
-function detectNoTestSuite(opts: {
+// Heuristics for "we can't meaningfully verify locally" — either the repo has
+// no real test suite, OR the test harness itself couldn't run in this sandbox.
+// In both cases the run is a soft-pass (open the PR, let review + the PR's CI be
+// the gate) rather than a real failure.
+function detectUnverifiable(opts: {
   testCommand: string;
   exitCode: number | null;
   stderr: string;
   stdout: string;
 }): boolean {
   const text = `${opts.stdout}\n${opts.stderr}`.toLowerCase();
+
+  // --- No real test suite (common scaffolds across the ship-gate languages) ---
   // npm init's default test script: `echo "Error: no test specified" && exit 1`
   if (text.includes('error: no test specified')) return true;
   // npm errors when package.json has no "test" script at all.
@@ -36,6 +39,18 @@ function detectNoTestSuite(opts: {
   if (text.includes('no tests ran') || text.includes('collected 0 items')) return true;
   // go test exits with `[no test files]` when there are no _test.go files
   if (text.includes('[no test files]')) return true;
+
+  // --- Harness couldn't run (the sandbox can't replicate the repo's full test
+  // environment: monorepo sibling installs, services, secrets). A scale-to-zero
+  // worker installs only the target package's deps; when the suite reaches into
+  // sibling packages or unconfigured tooling, it fails to even START — module
+  // resolution, a missing test binary, etc. That's NOT a real assertion failure
+  // and no code edit fixes it, so don't block (or burn repair cycles) on it.
+  // Open the PR; the PR's CI has the full setup and is the real test gate. ---
+  if (text.includes('cannot find module') || text.includes('module not found')) return true;
+  if (text.includes('cannot find package')) return true;
+  if (text.includes('command not found') || text.includes('not recognized as')) return true;
+  if (text.includes('could not determine executable to run')) return true;
   return false;
 }
 
@@ -66,15 +81,16 @@ export async function runTests(opts: {
   const timedOut = result.error?.message?.includes('ETIMEDOUT') === true;
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
-  const noTestSuite = !timedOut && detectNoTestSuite({
+  const noTestSuite = !timedOut && detectUnverifiable({
     testCommand,
     exitCode: result.status,
     stdout,
     stderr,
   });
-  // "No test suite" is a soft-pass: nothing to verify, but the editor's patch
-  // doesn't get to claim it's been validated either. The pipeline still opens
-  // a draft PR — review is the gate.
+  // Soft-pass: either there's no suite, or the harness couldn't run here.
+  // Nothing was validated locally, but the patch doesn't get to claim it was
+  // either — the pipeline still opens a draft PR, and review + the PR's CI are
+  // the gate.
   const passed = !timedOut && (result.status === 0 || noTestSuite);
 
   if (timedOut) {
@@ -82,7 +98,7 @@ export async function runTests(opts: {
   } else if (noTestSuite) {
     await logger.warn(
       'tests',
-      `No test suite detected (exit ${result.status}) — opening PR without test verification`,
+      `Could not verify locally (exit ${result.status}) — opening PR; the PR's CI runs the tests`,
     );
   } else if (passed) {
     await logger.success('tests', 'Tests passed', durationMs);

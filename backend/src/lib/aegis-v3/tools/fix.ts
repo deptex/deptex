@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AegisToolEntry } from '../tool-types';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 import { generateFixPlan } from '../fix-planner';
+import { createFixRequest, fixTypeColumn } from '../fix-request';
 import { autoIgnoreReasonText, vulnAutoIgnoreReason } from '../finding-triage';
 import { signApprovalToken, verifyApprovalToken } from '../approval-token';
 import { resolveProject } from './resolvers';
@@ -12,18 +13,6 @@ import {
   type FixPlan,
   type FixStatus,
 } from '../plan-types';
-
-function strategyForFindingType(findingType: FindingType): string {
-  if (findingType === 'semgrep') return 'fix_semgrep';
-  if (findingType === 'secret') return 'remediate_secret';
-  return 'code_patch';
-}
-
-function fixTypeColumn(findingType: FindingType): 'osv_id' | 'semgrep_finding_id' | 'secret_finding_id' {
-  if (findingType === 'vulnerability') return 'osv_id';
-  if (findingType === 'semgrep') return 'semgrep_finding_id';
-  return 'secret_finding_id';
-}
 
 // Resolve a non-UUID handle from list_project_issues to the underlying row id
 // for semgrep / secret findings. Vulnerability handles are OSV ids and pass
@@ -206,94 +195,52 @@ const requestFix: AegisToolEntry<{
       };
     }
 
-    const insertRow: Record<string, any> = {
-      project_id: projectId,
-      organization_id: ctx.orgId,
-      fix_type: findingType,
-      strategy: strategyForFindingType(findingType),
-      status: 'planning' as FixStatus,
-      triggered_by: ctx.userId,
-      [fixTypeColumn(findingType)]: findingId,
-      payload: { source: 'aegis_tool_request_fix' },
-    };
-    // Phase 28: durable thread <-> fix link so the panel can list every
-    // plan generated in this thread without relying on frontend memory.
-    if (ctx.threadId) insertRow.thread_id = ctx.threadId;
-
-    const { data: created, error: insertError } = await ctx.supabase
-      .from('project_security_fixes')
-      .insert(insertRow)
-      .select('id')
-      .single();
-    if (insertError || !created) {
-      return { error: insertError?.message ?? 'Failed to create fix request' };
-    }
-
-    // Link this chat thread to the fix so the sidebar can render a status icon.
-    // Best-effort — failure here doesn't break the fix flow.
-    if (ctx.threadId) {
-      try {
-        await ctx.supabase
-          .from('aegis_chat_threads')
-          .update({ context_type: 'fix', context_id: created.id })
-          .eq('id', ctx.threadId)
-          .is('context_id', null);
-      } catch (err) {
-        console.error('[aegis-tool] failed to link thread to fix', ctx.threadId, created.id, err);
-      }
-    }
-
     // Mark BEFORE plan generation so a duplicate request for the same finding
     // mid-generation (the model fan-out racing itself) gets rejected too.
     ctx.turnState.requestedFindings.add(findingKey);
 
-    let result;
-    try {
-      result = await generateFixPlan({
-        organizationId: ctx.orgId,
-        projectId,
-        findingType,
-        findingId,
-        triggeredByUserId: ctx.userId,
-      });
-    } catch (err: any) {
-      await ctx.supabase
-        .from('project_security_fixes')
-        .update({
-          status: 'failed',
-          error_message: `Plan generation failed: ${err?.message ?? 'unknown error'}`,
-          completed_at: new Date().toISOString(),
-        })
-        .eq('id', created.id);
-      return { fixId: created.id, status: 'failed', error: err?.message ?? 'Plan generation failed' };
+    // Insert + plan + persist via the shared money-path helper (the same code
+    // the REST route and the task fan-out use). No auto-approve here — the chat
+    // flow surfaces the plan for the user to approve via approve_fix.
+    const result = await createFixRequest({
+      organizationId: ctx.orgId,
+      projectId,
+      findingType,
+      findingId,
+      triggeredByUserId: ctx.userId,
+      threadId: ctx.threadId,
+      payloadSource: 'aegis_tool_request_fix',
+    });
+    if (!result.fixId) {
+      return { error: result.error ?? 'Failed to create fix request' };
+    }
+    if (result.status === 'failed' && !result.plan) {
+      return { fixId: result.fixId, status: 'failed', error: result.error ?? 'Plan generation failed' };
     }
 
-    const generatedAt = new Date().toISOString();
-    const isRefusal = !!result.plan.refusal;
-    const status: FixStatus = isRefusal ? 'failed' : 'awaiting_approval';
-    const approvalToken = isRefusal
-      ? null
-      : signApprovalToken(created.id, ctx.orgId, generatedAt);
-
-    await ctx.supabase
-      .from('project_security_fixes')
-      .update({
-        status,
-        plan: result.plan,
-        plan_generated_at: generatedAt,
-        plan_base_sha: result.baseSha,
-        plan_base_branch: result.baseBranch,
-        approval_token: approvalToken,
-        error_message: isRefusal ? `Refusal: ${result.plan.refusal?.reason}` : null,
-        completed_at: isRefusal ? generatedAt : null,
-      })
-      .eq('id', created.id);
+    // Link this chat thread to the fix so the sidebar can render a status icon.
+    // Best-effort — failure here doesn't break the fix flow. The `.is(context_id,
+    // null)` guard keeps it from clobbering a fix/task thread that's already
+    // bound; the `.neq(context_type, 'task')` guard stops an in-task request_fix
+    // from repossessing a task-chat (a task IS a chat with context_type='task').
+    if (ctx.threadId) {
+      try {
+        await ctx.supabase
+          .from('aegis_chat_threads')
+          .update({ context_type: 'fix', context_id: result.fixId })
+          .eq('id', ctx.threadId)
+          .is('context_id', null)
+          .neq('context_type', 'task');
+      } catch (err) {
+        console.error('[aegis-tool] failed to link thread to fix', ctx.threadId, result.fixId, err);
+      }
+    }
 
     return {
-      fixId: created.id,
-      status,
-      plan: result.plan,
-      refusal: result.plan.refusal,
+      fixId: result.fixId,
+      status: result.status,
+      plan: result.plan ?? undefined,
+      refusal: result.refusal,
     };
   },
 };

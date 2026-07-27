@@ -182,6 +182,21 @@ export async function queuePopulateDependencyBatch(
 }
 
 /**
+ * Queue an Aegis task-agent run. The loop (investigate → decide → apply_fix →
+ * finish) runs durably in the delivered worker request rather than as
+ * background work after an HTTP response, which a serverless host would kill.
+ *
+ * retries: 0 — a task run applies a real fix (opens a PR); a blind retry of a
+ * partially-completed run could open a second PR. A failed run is re-triggered
+ * from the UI instead. runTaskAgent also early-returns on an already-terminal
+ * task as a backstop.
+ */
+export async function queueTaskRun(taskId: string): Promise<{ messageId: string } | null> {
+  const url = `${getApiBaseUrl().replace(/\/$/, '')}/api/workers/run-task`;
+  return getJobQueue().publish(url, { taskId }, { retries: 0 });
+}
+
+/**
  * Queue a backfill job to populate transitive dependency edges.
  * Uses the same npm flow-control key so npm jobs never run concurrently.
  */

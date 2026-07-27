@@ -4,7 +4,15 @@
 
 export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
-export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FindingType =
+  | 'vulnerability'
+  | 'semgrep'
+  | 'secret'
+  | 'iac'
+  | 'container'
+  | 'base_image'
+  | 'dataflow'
+  | 'dast';
 export type FileChangeAction = 'modify' | 'create' | 'delete';
 
 export interface PlanFileChange {
@@ -54,6 +62,11 @@ export const ALL_LANGUAGES: readonly PlanLanguage[] = [
 export const MAX_DIFF_LOC = 500;
 export const MAX_TOOL_CALLS = 30;
 export const REPAIR_BUDGET = 2;
+
+// Agentic explore loop (dataflow / dast) budget — separate from MAX_TOOL_CALLS so
+// a deep taint path or a hard-to-find handler can't starve edit + repair.
+export const MAX_EXPLORE_STEPS = 12;
+export const MAX_EXPLORE_TOOL_CALLS = 20;
 
 /**
  * Resolve which languages this worker (and the planner mirroring this env) is

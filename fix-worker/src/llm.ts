@@ -21,6 +21,29 @@ const DEFAULT_MODELS: Record<AIProvider, string> = {
   deepinfra: 'deepseek-ai/DeepSeek-V3.1',
 };
 
+// Input context window (tokens) per model, for the task chat's context meter.
+// Deliberately conservative — the bar is a "how close to the limit" signal, not
+// a billing figure, and under-stating the window errs toward compacting/warning
+// early rather than overflowing. Keyed by provider with a couple of id refinements.
+export function contextWindowFor(provider: AIProvider, modelName: string): number {
+  const id = modelName.toLowerCase();
+  if (provider === 'anthropic') return 200_000; // claude sonnet/opus 4.x
+  if (provider === 'google') return 1_000_000; // gemini 2.5 pro/flash
+  if (provider === 'deepinfra') return 128_000; // deepseek-v3.1 family
+  if (provider === 'openai') {
+    if (id.includes('gpt-4.1') || id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4')) return 200_000;
+    return 128_000; // gpt-4o / 4o-mini
+  }
+  return 128_000; // conservative default for an unknown provider
+}
+
+export interface ResolvedModel {
+  model: LanguageModel;
+  provider: AIProvider;
+  modelName: string;
+  contextWindow: number;
+}
+
 // Model-id → provider mapping for `organizations.default_model`. Backend's
 // llm-provider keeps the canonical map in `lib/ai/models.ts` but we can't
 // reach across the worker boundary; we infer provider from the prefix. If
@@ -71,10 +94,15 @@ function buildModel(provider: AIProvider, apiKey: string, modelName: string): La
   }
 }
 
-export async function getLanguageModelForOrg(
+/**
+ * Resolve the org's model AND its identity/window (the loop needs the window for
+ * the context meter). getLanguageModelForOrg delegates here for back-compat.
+ */
+export async function resolveOrgModel(
   supabase: SupabaseClient,
   organizationId: string,
-): Promise<LanguageModel> {
+  modelIdOverride?: string,
+): Promise<ResolvedModel> {
   const { data, error } = await supabase
     .from('organizations')
     .select('default_ai_provider, default_model')
@@ -82,26 +110,32 @@ export async function getLanguageModelForOrg(
     .single();
   if (error) throw new Error(`Failed to load organization: ${error.message}`);
 
-  // Mirror backend resolveOrgModel(): prefer default_model when the prefix
-  // unambiguously identifies a provider, fall back to default_ai_provider
-  // with the worker's hard-coded default for that provider. Without this
-  // sync, the user sees their chosen model in the UI but the worker quietly
-  // runs against gpt-4o / sonnet / etc.
-  const defaultModel = data?.default_model as string | null | undefined;
   let provider: AIProvider;
   let modelName: string;
-  if (defaultModel) {
-    const inferred = inferProviderFromModelId(defaultModel);
-    if (inferred) {
+
+  // An explicit override (e.g. AEGIS_TASK_MODEL for the autonomous agent) wins
+  // over the org default so the agent's model is toggleable without touching the
+  // org-wide setting. Provider is inferred from the model id, falling back to the
+  // org's default_ai_provider when the prefix is unrecognised.
+  if (modelIdOverride) {
+    const inferred = inferProviderFromModelId(modelIdOverride);
+    provider = inferred ?? ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
+    modelName = inferred ? modelIdOverride : DEFAULT_MODELS[provider];
+  } else {
+    // Mirror backend resolveOrgModel(): prefer default_model when the prefix
+    // unambiguously identifies a provider, fall back to default_ai_provider
+    // with the worker's hard-coded default for that provider. Without this
+    // sync, the user sees their chosen model in the UI but the worker quietly
+    // runs against gpt-4o / sonnet / etc.
+    const defaultModel = data?.default_model as string | null | undefined;
+    const inferred = defaultModel ? inferProviderFromModelId(defaultModel) : null;
+    if (defaultModel && inferred) {
       provider = inferred;
       modelName = defaultModel;
     } else {
-      provider = ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
+      provider = (data?.default_ai_provider as AIProvider) ?? 'anthropic';
       modelName = DEFAULT_MODELS[provider];
     }
-  } else {
-    provider = ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
-    modelName = DEFAULT_MODELS[provider];
   }
 
   const apiKey = getPlatformKey(provider);
@@ -110,5 +144,18 @@ export async function getLanguageModelForOrg(
       `Platform API key for ${provider} is not configured on the fix-worker. Set ${envVarFor(provider)}.`,
     );
   }
-  return buildModel(provider, apiKey, modelName);
+  return {
+    model: buildModel(provider, apiKey, modelName),
+    provider,
+    modelName,
+    contextWindow: contextWindowFor(provider, modelName),
+  };
+}
+
+export async function getLanguageModelForOrg(
+  supabase: SupabaseClient,
+  organizationId: string,
+  modelIdOverride?: string,
+): Promise<LanguageModel> {
+  return (await resolveOrgModel(supabase, organizationId, modelIdOverride)).model;
 }

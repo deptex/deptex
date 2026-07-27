@@ -90,6 +90,7 @@ describe('registry shape', () => {
         'reject_fix',
         'request_fix',
         'revise_fix',
+        'create_task',
         'list_organization_members',
         'list_team_members',
         'list_organization_roles',
@@ -101,7 +102,7 @@ describe('registry shape', () => {
 
     const safeNoPermissionTools = ALL_AEGIS_TOOLS.filter(
       (t) =>
-        !['request_fix', 'revise_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(
+        !['request_fix', 'revise_fix', 'approve_fix', 'reject_fix', 'check_fix_status', 'create_task'].includes(
           t.name,
         ),
     );
@@ -111,7 +112,7 @@ describe('registry shape', () => {
     }
 
     const writeTools = ALL_AEGIS_TOOLS.filter((t) =>
-      ['request_fix', 'revise_fix', 'approve_fix', 'reject_fix'].includes(t.name),
+      ['request_fix', 'revise_fix', 'approve_fix', 'reject_fix', 'create_task'].includes(t.name),
     );
     for (const t of writeTools) {
       expect(t.permission).toBe('trigger_fix');
@@ -128,7 +129,7 @@ describe('registry shape', () => {
 
   it('no read-only tool advertises a UUID-formatted arg', () => {
     const readOnly = ALL_AEGIS_TOOLS.filter(
-      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(t.name),
+      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status', 'create_task'].includes(t.name),
     );
     for (const t of readOnly) {
       const schema = (t.inputSchema as any).jsonSchema ?? t.inputSchema;

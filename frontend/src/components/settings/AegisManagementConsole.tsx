@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Settings2, DollarSign, Play, Zap, Brain, BookOpen, AlertTriangle,
-  BarChart3, FileText, Search, Plus, Trash2, Edit2, Download, Pause, X, Check,
-  Shield, Key, Clipboard, Puzzle, MoreHorizontal, Clock,
+  Settings2, DollarSign, Zap, Brain, BookOpen,
+  BarChart3, FileText, Search, Plus, Trash2, Edit2, Download, Pause,
+  MoreHorizontal, Clock,
 } from 'lucide-react';
 import { RolePermissions } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -10,8 +10,7 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
-import { Progress } from '../ui/progress';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Label } from '../ui/label';
 import { useToast } from '../../hooks/use-toast';
@@ -55,11 +54,9 @@ const TOOL_CATEGORIES = [
 const TABS = [
   { id: 'configuration', label: 'Configuration', icon: Settings2 },
   { id: 'spending', label: 'Spending', icon: DollarSign },
-  { id: 'active_work', label: 'Active Work', icon: Play },
   { id: 'automations', label: 'Automations', icon: Zap },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'learning', label: 'Learning', icon: BookOpen },
-  { id: 'incidents', label: 'Incidents', icon: AlertTriangle },
   { id: 'usage', label: 'Usage', icon: BarChart3 },
   { id: 'audit', label: 'Audit Log', icon: FileText },
 ];
@@ -295,12 +292,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
   }, [organizationId]);
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
-  useEffect(() => {
-    if (activeTab === 'active_work') {
-      loadTasks();
-      loadApprovals();
-    }
-  }, [activeTab, loadTasks, loadApprovals]);
   useEffect(() => {
     if (activeTab === 'memory') loadMemories();
   }, [activeTab, loadMemories]);
@@ -544,84 +535,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
           </div>
         )}
 
-        {activeTab === 'active_work' && (
-          <div className="space-y-6">
-            <Card className="bg-background-card border-border">
-              <CardHeader>
-                <CardTitle className="text-foreground">Running Tasks</CardTitle>
-                <CardDescription className="text-foreground-secondary">Tasks currently in progress.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {loadingTasks ? (
-                  <div className="space-y-3">
-                    {[1, 2].map((i) => (
-                      <div key={i} className="h-12 bg-muted animate-pulse rounded" />
-                    ))}
-                  </div>
-                ) : tasks.length === 0 ? (
-                  <p className="text-foreground-secondary text-sm">No running tasks.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {tasks.map((t: any) => (
-                      <div key={t.id} className="border border-border rounded-lg p-4">
-                        <div className="flex justify-between mb-2">
-                          <span className="font-medium">{t.name ?? t.task_type ?? 'Task'}</span>
-                          <Badge variant="outline" className="text-foreground-secondary border-border bg-transparent">
-                            {t.status ?? 'Running'}
-                          </Badge>
-                        </div>
-                        <Progress value={t.progress ?? 50} className="h-2" />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="bg-background-card border-border">
-              <CardHeader>
-                <CardTitle className="text-foreground">Pending Approvals</CardTitle>
-                <CardDescription className="text-foreground-secondary">Actions waiting for your approval.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {loadingApprovals ? (
-                  <div className="space-y-3">
-                    {[1, 2].map((i) => (
-                      <div key={i} className="h-16 bg-muted animate-pulse rounded" />
-                    ))}
-                  </div>
-                ) : approvals.length === 0 ? (
-                  <p className="text-foreground-secondary text-sm">No pending approvals.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {approvals.map((a: any) => (
-                      <div
-                        key={a.id}
-                        className="flex items-center justify-between border border-border rounded-lg p-4"
-                      >
-                        <div>
-                          <p className="font-medium">{a.description ?? a.action_type ?? 'Approval'}</p>
-                          <p className="text-sm text-foreground-secondary">{a.context ?? ''}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="outline" onClick={() => handleReject(a.id)}>
-                            <X className="h-4 w-4 mr-1" />
-                            Reject
-                          </Button>
-                          <Button size="sm" onClick={() => handleApprove(a.id)}>
-                            <Check className="h-4 w-4 mr-1" />
-                            Approve
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
         {activeTab === 'automations' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -753,10 +666,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
 
         {activeTab === 'learning' && (
           <LearningDashboard orgId={organizationId} />
-        )}
-
-        {activeTab === 'incidents' && (
-          <IncidentResponseSection organizationId={organizationId} />
         )}
 
         {activeTab === 'usage' && (
@@ -918,289 +827,6 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ─── Incident Response Section ─────────────────────────────────────
-
-interface IncidentStats {
-  active: number;
-  severityBreakdown: Record<string, number>;
-  monthlyCount: number;
-  resolvedThisMonth: number;
-  activeThisMonth: number;
-  avgResolutionMs: number | null;
-  totalResolved: number;
-}
-
-interface Playbook {
-  id: string;
-  name: string;
-  trigger_type: string;
-  trigger_criteria: any;
-  auto_execute: boolean;
-  is_template: boolean;
-  enabled: boolean;
-  usage_count: number;
-  phases: any[];
-}
-
-interface IncidentRow {
-  id: string;
-  title: string;
-  incident_type: string;
-  severity: string;
-  status: string;
-  declared_at: string;
-  total_duration_ms?: number;
-  affected_projects?: string[];
-}
-
-const PLAYBOOK_ICONS: Record<string, React.ReactNode> = {
-  zero_day: <Shield className="w-4 h-4 text-foreground-secondary" />,
-  supply_chain: <AlertTriangle className="w-4 h-4 text-foreground-secondary" />,
-  secret_exposure: <Key className="w-4 h-4 text-foreground-secondary" />,
-  compliance_breach: <Clipboard className="w-4 h-4 text-foreground-secondary" />,
-  custom: <Puzzle className="w-4 h-4 text-foreground-secondary" />,
-};
-
-const TYPE_BADGE: Record<string, { bg: string; text: string; label: string }> = {
-  zero_day: { bg: 'bg-red-500/15', text: 'text-red-400', label: 'Zero-Day' },
-  supply_chain: { bg: 'bg-amber-500/15', text: 'text-amber-400', label: 'Supply Chain' },
-  secret_exposure: { bg: 'bg-purple-500/15', text: 'text-purple-400', label: 'Secret' },
-  compliance_breach: { bg: 'bg-blue-500/15', text: 'text-blue-400', label: 'Compliance' },
-  custom: { bg: 'bg-muted/50', text: 'text-foreground-secondary', label: 'Custom' },
-};
-
-function formatDurationMs(ms?: number | null): string {
-  if (!ms || ms <= 0) return 'N/A';
-  const min = Math.floor(ms / 60000);
-  if (min < 60) return `${min}m`;
-  const hrs = Math.floor(min / 60);
-  return `${hrs}h ${min % 60}m`;
-}
-
-function IncidentResponseSection({ organizationId }: { organizationId: string }) {
-  const [stats, setStats] = useState<IncidentStats | null>(null);
-  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
-  const [incidents, setIncidents] = useState<IncidentRow[]>([]);
-  const [totalIncidents, setTotalIncidents] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const pageSize = 20;
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!token) return;
-      const headers = { Authorization: `Bearer ${token}` };
-
-      const [statsRes, playbooksRes, incidentsRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/organizations/${organizationId}/incidents/stats`, { headers }),
-        fetch(`${API_BASE_URL}/api/organizations/${organizationId}/playbooks`, { headers }),
-        fetch(`${API_BASE_URL}/api/organizations/${organizationId}/incidents?page=${page}&limit=${pageSize}`, { headers }),
-      ]);
-
-      if (statsRes.ok) setStats(await statsRes.json());
-      if (playbooksRes.ok) setPlaybooks(await playbooksRes.json());
-      if (incidentsRes.ok) {
-        const data = await incidentsRes.json();
-        setIncidents(data.incidents || []);
-        setTotalIncidents(data.total || 0);
-      }
-    } catch {}
-    setLoading(false);
-  }, [organizationId, page]);
-
-  useEffect(() => { loadData(); }, [loadData]);
-
-  if (loading && !stats) {
-    return (
-      <div className="space-y-4">
-        {[1, 2, 3].map((i) => (
-          <Card key={i} className="bg-background-card border-border">
-            <CardContent className="pt-6"><div className="h-12 bg-muted animate-pulse rounded" /></CardContent>
-          </Card>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Metrics cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="bg-background-card border-border">
-          <CardContent className="pt-6">
-            <p className="text-sm text-foreground-secondary">Active Incidents</p>
-            <p className={`text-[28px] font-semibold mt-1 ${
-              (stats?.active || 0) > 0 ? 'text-destructive' : 'text-primary'
-            }`}>{stats?.active || 0}</p>
-            <p className="text-[12px] text-foreground-secondary mt-1">
-              {stats?.active === 0 ? 'No active incidents' :
-                Object.entries(stats?.severityBreakdown || {}).map(([k, v]) => `${v} ${k}`).join(', ')}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-background-card border-border">
-          <CardContent className="pt-6">
-            <p className="text-sm text-foreground-secondary">Avg Resolution Time</p>
-            <p className="text-[28px] font-semibold text-foreground mt-1">
-              {formatDurationMs(stats?.avgResolutionMs)}
-            </p>
-            <p className="text-[12px] text-foreground-secondary mt-1">across {stats?.totalResolved || 0} incidents</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-background-card border-border">
-          <CardContent className="pt-6">
-            <p className="text-sm text-foreground-secondary">Incidents This Month</p>
-            <p className="text-[28px] font-semibold text-foreground mt-1">{stats?.monthlyCount || 0}</p>
-            <p className="text-[12px] text-foreground-secondary mt-1">
-              {stats?.resolvedThisMonth || 0} resolved, {stats?.activeThisMonth || 0} active
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Playbooks */}
-      <Card className="bg-background-card border-border">
-        <CardHeader className="flex flex-row items-center justify-between pb-4">
-          <CardTitle className="text-[15px] font-semibold">Response Playbooks</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-0">
-          {playbooks.length === 0 ? (
-            <p className="text-sm text-foreground-secondary py-4 text-center">No playbooks configured yet.</p>
-          ) : (
-            playbooks.map((pb) => {
-              const triggerSummary = pb.trigger_criteria
-                ? `Triggers on: ${JSON.stringify(pb.trigger_criteria).slice(0, 60)}`
-                : 'Triggers on all matching events';
-              return (
-                <div key={pb.id} className="flex items-center gap-3 py-3 border-b border-border last:border-b-0">
-                  <div className="shrink-0">{PLAYBOOK_ICONS[pb.trigger_type] || PLAYBOOK_ICONS.custom}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-semibold text-foreground">{pb.name}</span>
-                      {pb.is_template && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-muted text-foreground-secondary">Template</span>
-                      )}
-                    </div>
-                    <p className="text-[12px] text-foreground-secondary truncate">{triggerSummary}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-[12px] text-foreground-secondary">Used {pb.usage_count}x</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] text-foreground-secondary">Auto</span>
-                      <div className={`w-8 h-4 rounded-full flex items-center px-0.5 ${
-                        pb.auto_execute ? 'bg-primary' : 'bg-muted'
-                      }`}>
-                        <div className={`w-3 h-3 rounded-full bg-primary-foreground transition-transform ${
-                          pb.auto_execute ? 'translate-x-4' : 'translate-x-0'
-                        }`} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Incident History */}
-      <Card className="bg-background-card border-border">
-        <CardHeader className="flex flex-row items-center justify-between pb-4">
-          <CardTitle className="text-[15px] font-semibold">Incident History</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {incidents.length === 0 ? (
-            <div className="py-8 text-center">
-              <AlertTriangle className="w-8 h-8 text-foreground-muted mx-auto mb-2" />
-              <p className="text-[14px] text-foreground-secondary">No incidents recorded yet.</p>
-              <p className="text-[12px] text-foreground-muted mt-1">
-                Incidents are created automatically when playbook triggers fire, or manually via Aegis chat.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Date</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Incident</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Type</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Severity</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Duration</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Projects</th>
-                      <th className="pb-2 text-[12px] font-medium text-foreground-secondary">Resolution</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {incidents.map((inc) => {
-                      const typeBadge = TYPE_BADGE[inc.incident_type] || TYPE_BADGE.custom;
-                      return (
-                        <tr key={inc.id} className="border-b border-border hover:bg-table-hover cursor-pointer">
-                          <td className="py-2.5 text-[12px] font-mono text-foreground-secondary">
-                            {new Date(inc.declared_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                          </td>
-                          <td className="py-2.5 text-[13px] font-semibold text-foreground max-w-[200px] truncate">
-                            {inc.title}
-                          </td>
-                          <td className="py-2.5">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] ${typeBadge.bg} ${typeBadge.text}`}>
-                              {typeBadge.label}
-                            </span>
-                          </td>
-                          <td className="py-2.5">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                              inc.severity === 'critical' ? 'bg-red-500/15 text-red-400' :
-                              inc.severity === 'high' ? 'bg-amber-500/15 text-amber-400' :
-                              'bg-muted/50 text-foreground-secondary'
-                            }`}>{inc.severity}</span>
-                          </td>
-                          <td className="py-2.5 text-[12px] font-mono text-foreground-secondary">
-                            {formatDurationMs(inc.total_duration_ms)}
-                          </td>
-                          <td className="py-2.5 text-[12px] text-foreground-secondary">
-                            {inc.affected_projects?.length || 0}
-                          </td>
-                          <td className="py-2.5">
-                            <span className={`text-[12px] font-semibold ${
-                              inc.status === 'resolved' || inc.status === 'closed' ? 'text-primary' :
-                              inc.status === 'aborted' ? 'text-destructive' : 'text-warning'
-                            }`}>{inc.status === 'closed' ? 'Resolved' : inc.status.charAt(0).toUpperCase() + inc.status.slice(1)}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {totalIncidents > pageSize && (
-                <div className="flex items-center justify-between mt-4 text-[12px] text-foreground-secondary">
-                  <span>Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, totalIncidents)} of {totalIncidents}</span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => setPage(p => Math.max(1, p - 1))}
-                      disabled={page === 1}
-                      className="px-2.5 py-1 rounded-md bg-background-card border border-border hover:bg-table-hover disabled:opacity-40"
-                    >Prev</button>
-                    <button
-                      onClick={() => setPage(p => p + 1)}
-                      disabled={page * pageSize >= totalIncidents}
-                      className="px-2.5 py-1 rounded-md bg-background-card border border-border hover:bg-table-hover disabled:opacity-40"
-                    >Next</button>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

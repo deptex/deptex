@@ -1,4 +1,4 @@
-import { execSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
+import { execSync, spawnSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FixLogger } from './logger';
@@ -36,6 +36,30 @@ export function createSandbox(fixId: string): SandboxHandle {
   };
 }
 
+// Never let an installation token (or any x-access-token URL) reach a log line
+// or the chat's terminal card.
+function stripTokens(s: string): string {
+  return s.replace(/x-access-token:[^@\s]*@/g, '');
+}
+
+/**
+ * Rewrite `origin` to a TOKENLESS url after the (token-authenticated) clone.
+ * A `git clone https://x-access-token:TOKEN@github.com/...` bakes the
+ * installation token into `.git/config`, where it sits for the entire agent
+ * loop — a prompt-injected `run_command('git push origin HEAD:main')` would use
+ * it to bypass the draft-PR-only guarantee (or push cross-repo). The controlled
+ * push (`pr.ts` pushBranch) re-adds the token for exactly one push and clears it
+ * again, so nothing legitimate needs the token to live in origin between clone
+ * and push. Best-effort — a failure to strip must not fail the clone.
+ */
+function stripOriginToken(workDir: string, repoFullName: string): void {
+  try {
+    execSync(`git -C "${workDir}" remote set-url origin "https://github.com/${repoFullName}.git"`, EXEC_OPTS);
+  } catch {
+    /* best-effort — pushBranch still re-scopes + clears the token itself */
+  }
+}
+
 export async function cloneAtSha(opts: {
   workDir: string;
   installationToken: string;
@@ -43,7 +67,7 @@ export async function cloneAtSha(opts: {
   branch: string;
   baseSha: string;
   logger: FixLogger;
-}): Promise<void> {
+}): Promise<string> {
   const { workDir, installationToken, repoFullName, branch, baseSha, logger } = opts;
   const cloneUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
   const startedAt = Date.now();
@@ -52,10 +76,17 @@ export async function cloneAtSha(opts: {
   // Shallow clone the branch tip then hard-reset to baseSha so the worker
   // operates against the exact SHA the user approved. If baseSha is no longer
   // reachable from the shallow tip we fall back to a full fetch of that SHA.
-  execSync(
-    `git clone --depth 1 --single-branch --branch ${branch} "${cloneUrl}" "${workDir}"`,
-    { ...EXEC_OPTS, timeout: 300_000 },
+  // spawnSync (args array, no shell) captures git's progress output — which it
+  // writes to stderr — so the chat's terminal card can show the real transcript.
+  const clone = spawnSync(
+    'git',
+    ['clone', '--depth', '1', '--single-branch', '--branch', branch, cloneUrl, workDir],
+    { encoding: 'utf-8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
   );
+  if (clone.status !== 0) {
+    throw new Error(`git clone failed: ${stripTokens((clone.stderr || '').slice(-500))}`);
+  }
+  const cloneOutput = stripTokens(`${clone.stderr || ''}${clone.stdout || ''}`).trim();
 
   try {
     execSync(`git -C "${workDir}" cat-file -e ${baseSha}`, EXEC_OPTS);
@@ -63,8 +94,75 @@ export async function cloneAtSha(opts: {
     execSync(`git -C "${workDir}" fetch --depth 1 origin ${baseSha}`, { ...EXEC_OPTS, timeout: 180_000 });
   }
   execSync(`git -C "${workDir}" reset --hard ${baseSha}`, EXEC_OPTS);
+  // Token is no longer needed in origin — strip it before the agent loop starts.
+  stripOriginToken(workDir, repoFullName);
 
   await logger.success('clone', `Cloned ${repoFullName} at ${baseSha.slice(0, 7)}`, Date.now() - startedAt);
+  // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.
+  return cloneOutput.slice(-1500);
+}
+
+/**
+ * Clone a branch TIP — no reset to a pinned SHA. Used for (a) amending an
+ * existing PR branch (the clone IS that branch's head, so the later push
+ * fast-forwards), and (b) the resume-new-PR fallback off the CURRENT base tip
+ * instead of the stale accept-time SHA. Throws on failure.
+ */
+export async function cloneBranchHead(opts: {
+  workDir: string;
+  installationToken: string;
+  repoFullName: string;
+  branch: string;
+  /**
+   * Also fetch this branch's tip into refs/remotes/origin/<name>. A
+   * --single-branch clone has NO other refs, which blinds an amend-mode agent:
+   * it cannot compare against or restore files from the base branch (the
+   * lockfile-heal incident — `git checkout master -- package-lock.json` was
+   * impossible, forcing a churny from-scratch regen). Best-effort: a failure
+   * degrades to today's single-ref behavior, never fails the clone.
+   */
+  alsoFetchBranch?: string;
+  logger: FixLogger;
+}): Promise<string> {
+  const { workDir, installationToken, repoFullName, branch, alsoFetchBranch, logger } = opts;
+  const cloneUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
+  const startedAt = Date.now();
+  await logger.info('clone', `Cloning ${repoFullName}@${branch} (branch tip)`);
+
+  // spawnSync (args array, no shell) captures git's progress output — which it
+  // writes to stderr — so the chat's terminal card can show the real transcript.
+  const clone = spawnSync(
+    'git',
+    ['clone', '--depth', '1', '--single-branch', '--branch', branch, cloneUrl, workDir],
+    { encoding: 'utf-8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  if (clone.status !== 0) {
+    throw new Error(`git clone failed: ${stripTokens((clone.stderr || '').slice(-500))}`);
+  }
+  const cloneOutput = stripTokens(`${clone.stderr || ''}${clone.stdout || ''}`).trim();
+
+  if (alsoFetchBranch && alsoFetchBranch !== branch) {
+    // The token URL is still set on origin here, so private repos work.
+    try {
+      execSync(
+        `git -C "${workDir}" fetch --depth 1 origin +refs/heads/${alsoFetchBranch}:refs/remotes/origin/${alsoFetchBranch}`,
+        { ...EXEC_OPTS, timeout: 120_000 },
+      );
+    } catch (e: any) {
+      await logger.warn(
+        'clone',
+        `Could not fetch base branch ${alsoFetchBranch}: ${stripTokens(String(e?.message ?? e)).slice(0, 200)}`,
+      );
+    }
+  }
+
+  // Token is no longer needed in origin (the base fetch above is the last
+  // token op) — strip it before the agent loop can touch git.
+  stripOriginToken(workDir, repoFullName);
+
+  await logger.success('clone', `Cloned ${repoFullName}@${branch}`, Date.now() - startedAt);
+  // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.
+  return cloneOutput.slice(-1500);
 }
 
 function fileExists(workDir: string, relPath: string): boolean {

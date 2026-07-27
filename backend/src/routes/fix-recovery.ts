@@ -18,6 +18,37 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
   next();
 }
 
+/**
+ * Post an honest machine-crash failure to a task chat. A machine crash is a
+ * genuine fault on OUR side (the box died mid-run) — the same class as the
+ * worker's system_error — so the chat surface is the RED "Something went wrong"
+ * step line (icon 'error'), one line, no card. The machine-specific copy is
+ * stamped on the row's failure_details for the task-detail view + logs.
+ */
+export async function postCrashFailureToChat(
+  supabase: typeof getSupabaseClient,
+  job: { id: string; thread_id: string },
+): Promise<void> {
+  const headline = 'Something went wrong';
+  const explanation =
+    'The machine running this task stopped before it could finish — this is on my side, not a problem with your code.';
+  const nextStep = "Reply and I'll pick it up again from where I left off.";
+
+  await supabase
+    .from('project_security_fixes')
+    .update({ failure_details: { category: 'machine_crash', headline, explanation, nextStep } })
+    .eq('id', job.id);
+
+  await supabase.from('aegis_chat_messages').insert({
+    thread_id: job.thread_id,
+    role: 'assistant',
+    content: 'Something went wrong',
+    metadata: {
+      parts: [{ type: 'step', icon: 'error', label: 'Something went wrong', status: 'done' }],
+    },
+  });
+}
+
 router.use(requireInternalKey);
 
 /**
@@ -66,6 +97,72 @@ router.post('/fix-jobs', async (_req, res) => {
       }
     }
 
+    // Crash-wake: closes the only path where a user follow-up was silently
+    // stranded — a machine crash DURING a run that had a queued message (the
+    // worker's end-of-run drain never got to run). For each just-failed agent
+    // row whose task thread has a user message newer than the run, re-queue it
+    // via wake_agent_fix. Woken rows land 'approved', so the orphaned-approved
+    // sweep below boots a machine for them in this same cron pass.
+    let crashWakes = 0;
+    const wokenIds = new Set<string>();
+    if (Array.isArray(failed)) {
+      for (const job of failed) {
+        try {
+          if (job.strategy !== 'agent' || !job.thread_id || !job.task_id) continue;
+          // v1 guard (mirrors the worker's end-of-run drain): single-target
+          // tasks only — a multi-row task's rows share one thread, so a wake
+          // here could re-run the wrong target.
+          const { data: siblings } = await supabase
+            .from('project_security_fixes')
+            .select('id')
+            .eq('task_id', job.task_id)
+            .eq('strategy', 'agent')
+            .limit(2);
+          if ((siblings?.length ?? 0) > 1) continue;
+          const runStart = job.started_at ?? job.approved_at;
+          if (!runStart) continue;
+          const { data: pendingMsgs } = await supabase
+            .from('aegis_chat_messages')
+            .select('id')
+            .eq('thread_id', job.thread_id)
+            .eq('role', 'user')
+            .gt('created_at', runStart)
+            .limit(1);
+          if (!pendingMsgs?.length) continue;
+          const { data: wokeId } = await supabase.rpc('wake_agent_fix', { p_fix_id: job.id });
+          if (!wokeId) continue;
+          crashWakes++;
+          wokenIds.add(job.id);
+          await supabase.from('extraction_logs').insert({
+            project_id: job.project_id,
+            run_id: job.run_id,
+            step: 'complete',
+            level: 'warning',
+            message: 'Fix machine crashed mid-run with a pending follow-up — re-queued to resume.',
+          }).then(() => {});
+        } catch (e: any) {
+          console.error('[FIX-RECOVERY] crash-wake check failed for fix', job?.id, e?.message ?? e);
+        }
+      }
+    }
+
+    // Failure-experience contract on the crash path: a machine crash otherwise
+    // ends the task chat mid-narration ("Reading src/…") while the sidebar
+    // silently flips to failed — no honest "here's what happened". For each
+    // just-failed AGENT row with a task thread that we did NOT crash-wake above,
+    // post the red "Something went wrong" step line + set failure_details (the RPC
+    // leaves it null) so the chat reads truthfully. Best-effort.
+    if (Array.isArray(failed)) {
+      for (const job of failed) {
+        if (job.strategy !== 'agent' || !job.thread_id || wokenIds.has(job.id)) continue;
+        try {
+          await postCrashFailureToChat(supabase, job);
+        } catch (e: any) {
+          console.error('[FIX-RECOVERY] crash failure-card post failed for fix', job?.id, e?.message ?? e);
+        }
+      }
+    }
+
     // Start fix-worker machines for orphaned approved jobs (up to 3).
     // The new flow uses status='approved' rather than the legacy 'queued'.
     let machinesStarted = 0;
@@ -98,12 +195,13 @@ router.post('/fix-jobs', async (_req, res) => {
     }
 
     console.log(
-      `[FIX-RECOVERY] Requeued ${requeuedCount}, failed ${failedCount}, started ${machinesStarted} machines for ${orphanedJobs?.length ?? 0} orphaned jobs`
+      `[FIX-RECOVERY] Requeued ${requeuedCount}, failed ${failedCount}, crash-woke ${crashWakes}, started ${machinesStarted} machines for ${orphanedJobs?.length ?? 0} orphaned jobs`
     );
 
     res.json({
       requeued: requeuedCount,
       failed: failedCount,
+      crash_wakes: crashWakes,
       orphaned_jobs_found: orphanedJobs?.length ?? 0,
       machines_started: machinesStarted,
     });

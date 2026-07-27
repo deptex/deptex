@@ -226,6 +226,11 @@ export interface OrganizationMember {
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
 
 export type TrackerProvider = 'jira' | 'linear' | 'github';
+// A tracker LINK's provider can also be 'aegis' (Aegis-as-a-tracker): the
+// finding shows an Aegis chip while a task works it, ✓ when it resolves clean.
+// 'aegis' is NOT a user-fileable provider (no picker / destination) — it's
+// created by Send-to-Aegis, so the filing types above stay jira|linear|github.
+export type LinkProvider = TrackerProvider | 'aegis';
 export type TrackerFindingType =
   | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow'
   | 'container_group' | 'iac_group';
@@ -251,7 +256,7 @@ export interface FindingTrackerLink {
   project_id?: string;
   finding_type: string;
   finding_key: string;
-  provider: TrackerProvider;
+  provider: LinkProvider;
   external_key: string | null;
   external_url: string | null;
   title: string | null;
@@ -283,7 +288,10 @@ export interface FixPlan {
   description: string;
   issue?: string;
   todos?: { title: string; detail?: string }[];
-  fileChanges: PlanFileChange[];
+  // Optional: agent-strategy fixes (the autonomous task agent) don't pre-plan
+  // file changes the way the old plan-then-execute pipeline did, so this is
+  // absent on their plans. Always guard before mapping.
+  fileChanges?: PlanFileChange[];
   testCommand: string;
   verification?: string;
   verificationSteps?: { command: string; description: string }[];
@@ -325,9 +333,24 @@ export interface FixRecord {
   rejectedAt: string | null;
   prUrl: string | null;
   prNumber: number | null;
+  prBranch: string | null;
   diffSummary: string | null;
   errorMessage: string | null;
+  errorCategory?: string | null;
+  failureDetails?: FixFailureDetails | null;
   createdAt: string;
+}
+
+// What a failed fix tried + why it stopped — stamped on the fix row's
+// failure_details (task-detail view + logs; not rendered in the chat).
+export interface FixFailureDetails {
+  category?: string;
+  headline?: string;
+  explanation?: string;
+  nextStep?: string;
+  attemptedDiff?: string | null;
+  errorOutput?: string | null;
+  repairAttempts?: number | null;
 }
 
 export interface RequestFixResponse {
@@ -343,6 +366,27 @@ export interface FixStalenessResponse {
   currentHeadSha: string | null;
   baseSha: string | null;
   baseBranch: string | null;
+}
+
+// One file's NET change on a fix's PR (GitHub PR-files shape). `patch` is a
+// unified-diff BODY (hunk headers + +/- lines, no `diff --git` header); null
+// means large/binary/lockfile — show the row without a diff. `lockfile` marks
+// machine-regenerated files (package-lock.json etc.) the Changes tab hides.
+export interface FixChangeFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string | null;
+  lockfile?: boolean;
+}
+
+// The cumulative "Files changed" view of a fix's PR: initial vs now, one entry
+// per file. `prNumber: null` = no PR yet (the run is still mid-flight).
+export interface FixChangesResponse {
+  prNumber: number | null;
+  prUrl: string | null;
+  files: FixChangeFile[];
 }
 
 export async function getAuthToken(): Promise<string | null> {
@@ -3806,6 +3850,11 @@ export const api = {
 
   async getFix(fixId: string): Promise<{ fix: FixRecord }> {
     return fetchWithAuth(`/api/aegis/fix/${fixId}`);
+  },
+
+  /** Net per-file change set of a fix's PR (initial vs now) — the Changes tab's "Files changed" view. */
+  async getFixChanges(fixId: string): Promise<FixChangesResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/changes`);
   },
 
   async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {

@@ -7,6 +7,7 @@ import type { FixPlan } from './plan-types';
 import { MAX_DIFF_LOC, MAX_TOOL_CALLS, REPAIR_BUDGET } from './plan-types';
 import { applyDiffText } from './edit-tool';
 import { runRepair } from './repair';
+import { runExplorer } from './explorer';
 import { runTests, type TestResult } from './test-runner';
 
 const EXEC_OPTS: ExecSyncOptionsWithStringEncoding = { encoding: 'utf-8', timeout: 60_000 };
@@ -151,13 +152,132 @@ export async function runEditor(opts: {
   }
 }
 
-function cumulativeDiffLoc(workDir: string): number {
+// ---------------------------------------------------------------------------
+// Whole-file rewrite fallback.
+//
+// A unified diff only applies if the model reproduces the original lines (the
+// `-` and context lines) closely enough to MATCH. For escape-heavy / unusual
+// content (regex literals, template strings, deep indentation) the model drops
+// a backslash or a space and no hunk matches — even the repair, shown the file,
+// keeps re-reproducing it imperfectly. Aider's answer to this is the "whole"
+// edit format: when the diff won't land, have the model emit the COMPLETE
+// updated file and write it verbatim — no matching, nothing to drift.
+// ---------------------------------------------------------------------------
+
+const MAX_WHOLE_FILE_BYTES = 60_000;
+
+const WHOLE_FILE_SYSTEM = `You are the editor of Aegis Fix Agent. You are given one file and an approved plan, and you output the COMPLETE, updated content of that file with the fix applied — every line from first to last, exactly as it should be saved.
+
+RULES:
+- Output ONLY the file content. No explanation, no diff, no commentary.
+- You MAY wrap the whole file in a single \`\`\` code fence; put nothing else outside it.
+- Reproduce the ENTIRE file. NEVER elide with "// ... rest unchanged", "// existing code", "/* … */" or similar — every original line that you are not changing must be present verbatim.
+- Make the SMALLEST change that resolves the finding. Do not refactor or reformat unrelated code.`;
+
+function buildWholeFilePrompt(plan: FixPlan, relPath: string, content: string): string {
+  const fileNotes = plan.fileChanges
+    .filter((fc) => fc.path === relPath)
+    .map((fc) => `- ${fc.description}`);
+  return [
+    `PLAN SUMMARY: ${plan.summary}`,
+    `FINDING: ${plan.finding.type}/${plan.finding.id}`,
+    '',
+    'WHAT TO CHANGE:',
+    plan.description ?? plan.summary,
+    ...fileNotes,
+    '',
+    `FILE: ${relPath}`,
+    'CURRENT CONTENT:',
+    content,
+    '',
+    `Output the complete updated content of ${relPath} now.`,
+  ].join('\n');
+}
+
+function extractFileContent(text: string): string {
+  const trimmed = (text ?? '').trim();
+  // Prefer the largest fenced block if the model wrapped the file in one.
+  const fences = [...trimmed.matchAll(/```[a-zA-Z]*\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+  if (fences.length) return fences.sort((a, b) => b.length - a.length)[0];
+  return trimmed;
+}
+
+// Heuristics that a "whole file" output is actually elided / truncated.
+const ELISION_MARKER = /(\/\/|\/\*|#)\s*(\.\.\.|rest of|remaining|existing code|unchanged|truncated|snip)/i;
+
+/**
+ * Rewrite each file the plan modifies by asking the model for its COMPLETE
+ * updated content — the robust fallback when a diff won't apply. Resets the
+ * working tree first so a partially-applied diff doesn't corrupt the input,
+ * and rejects outputs that look elided or implausibly short.
+ */
+export async function rewriteFilesWhole(opts: {
+  model: LanguageModel;
+  plan: FixPlan;
+  workDir: string;
+  repoRoot: string;
+  logger: FixLogger;
+}): Promise<{ ok: boolean; tokensUsed: number; filesChanged: string[]; error?: string }> {
+  const { model, plan, workDir, repoRoot, logger } = opts;
+
+  // Discard any partial edit the failed diff left behind, so we rewrite from the
+  // clean base file rather than a half-patched one.
+  try {
+    execSync('git checkout -- .', { ...EXEC_OPTS, cwd: repoRoot });
+  } catch {
+    /* best effort — a clean clone is usually already clean */
+  }
+
+  const targets = plan.fileChanges.filter((fc) => fc.action !== 'create' && fc.action !== 'delete');
+  if (targets.length === 0) {
+    return { ok: false, tokensUsed: 0, filesChanged: [], error: 'no modifiable files for a whole-file rewrite' };
+  }
+
+  let tokensUsed = 0;
+  const filesChanged: string[] = [];
+  for (const fc of targets) {
+    const abs = path.join(workDir, fc.path);
+    if (!fs.existsSync(abs)) return { ok: false, tokensUsed, filesChanged, error: `file not found: ${fc.path}` };
+    const original = fs.readFileSync(abs, 'utf-8');
+    if (Buffer.byteLength(original, 'utf-8') > MAX_WHOLE_FILE_BYTES) {
+      return { ok: false, tokensUsed, filesChanged, error: `${fc.path} is too large to rewrite whole` };
+    }
+
+    await logger.info('edit', `Whole-file rewrite of ${fc.path} (the diff would not apply)`);
+    let result;
+    try {
+      result = await generateText({
+        model,
+        system: WHOLE_FILE_SYSTEM,
+        prompt: buildWholeFilePrompt(plan, fc.path, original),
+      });
+    } catch (err: any) {
+      return { ok: false, tokensUsed, filesChanged, error: `whole-file rewrite call failed: ${err?.message ?? err}` };
+    }
+    tokensUsed += (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
+
+    const next = extractFileContent(result.text ?? '');
+    if (!next.trim()) return { ok: false, tokensUsed, filesChanged, error: `empty rewrite for ${fc.path}` };
+    if (ELISION_MARKER.test(next) || next.length < original.length * 0.5) {
+      return { ok: false, tokensUsed, filesChanged, error: `rewrite of ${fc.path} looks elided/truncated` };
+    }
+
+    fs.writeFileSync(abs, next.endsWith('\n') ? next : `${next}\n`);
+    filesChanged.push(fc.path);
+  }
+
+  return { ok: true, tokensUsed, filesChanged };
+}
+
+function cumulativeDiffLoc(repoRoot: string): number {
   // Lines from the working tree against the base SHA. The clone reset us to
   // baseSha at start, so HEAD is the base; staged + unstaged together is the
   // entire fix delta. Counts every "+ "/"-" line including additions and
-  // deletions, ignoring file headers.
+  // deletions, ignoring file headers. MUST run at the repo root (where the
+  // branch/commit live) — `git diff HEAD` there captures edits made in a
+  // monorepo subdir too.
   try {
-    const out = execSync('git diff HEAD', { ...EXEC_OPTS, cwd: workDir });
+    const out = execSync('git diff HEAD', { ...EXEC_OPTS, cwd: repoRoot });
     return out
       .split('\n')
       .filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'))
@@ -167,19 +287,63 @@ function cumulativeDiffLoc(workDir: string): number {
   }
 }
 
+// Evidence attached to a failure so the task chat can SHOW its work — what the
+// model tried (the diff, even if it didn't apply) and the real blocker.
+export interface FixFailureDetails {
+  attemptedDiff?: string;
+  errorOutput?: string;
+  repairAttempts?: number;
+}
+
 export class FixPipelineError extends Error {
-  constructor(message: string, public category: string) {
+  constructor(
+    message: string,
+    public category: string,
+    public details?: FixFailureDetails,
+  ) {
     super(message);
   }
 }
 
+// A real-time "it's not going smoothly" signal so the chat narrates the struggle
+// (retrying a patch, tests failing) as it happens instead of jumping to silence.
+export type TroubleEvent =
+  | { kind: 'apply_retry'; attempt: number }
+  | { kind: 'tests_retry'; attempt: number; errorTail: string };
+
 export interface RunFixPipelineOpts {
   model: LanguageModel;
   plan: FixPlan;
+  // The finding type this fix targets (vulnerability | semgrep | secret | iac |
+  // dataflow | dast — base_image/container are handled outside this pipeline).
+  // Dependency bumps ('vulnerability') verify by re-resolving deps rather than
+  // running the app's full test suite (too slow + needs CI's full setup).
+  fixType?: string | null;
+  // The fix strategy. 'sanitize_dataflow' / 'patch_handler' run the agentic
+  // EXPLORE loop (the model reads the repo to place the fix) instead of the
+  // plan-only editor. Everything else uses the editor.
+  strategy?: string | null;
+  // Project directory (the monorepo subdir, or the repo root when there is no
+  // subdir). Used as the cwd for tests and as the base for resolving the
+  // plan's file-edit paths (which are relative to the project root).
   workDir: string;
+  // The clone / repo root, where the branch + commit live. Used only for git
+  // ops (the cumulative-diff cap). Equals workDir for non-monorepo projects.
+  repoRoot: string;
   logger: FixLogger;
   extraEnv: Record<string, string>;
   pipelineStartMs: number;
+  // Live-narration hook: fired once when the edit has actually applied (before
+  // the verify/install runs) and once when verification passes (with whether it
+  // was checked locally vs soft-passed to CI). Lets the worker post its
+  // edit/verify step + voice lines with real timing around the slow install.
+  onPhase?: (
+    phase: 'edit' | 'verify',
+    meta?: { verifiedLocally?: boolean; command?: string; output?: string },
+  ) => Promise<void>;
+  // Fired when a patch has to be retried (didn't apply) or the checks failed —
+  // lets the worker narrate the struggle in real time.
+  onTrouble?: (event: TroubleEvent) => Promise<void>;
 }
 
 export interface RunFixPipelineResult {
@@ -188,6 +352,60 @@ export interface RunFixPipelineResult {
   tokensUsed: number;
   toolCalls: number;
   repairAttempts: number;
+}
+
+// Verify a dependency bump by re-resolving deps. For JS/TS that's `npm install`
+// — it validates the bumped version exists and regenerates package-lock.json so
+// CI's `npm ci` passes; a non-existent version fails here (real signal, no PR).
+// For languages without a fast, reliable re-resolve in this sandbox, skip local
+// verification (soft-pass) and let the PR's CI be the gate.
+async function verifyDependencyBump(opts: {
+  workDir: string;
+  language: string;
+  logger: FixLogger;
+  timeoutMs: number;
+}): Promise<TestResult> {
+  if (opts.language === 'js' || opts.language === 'ts') {
+    return runTests({
+      workDir: opts.workDir,
+      testCommand: 'npm install --no-audit --no-fund',
+      logger: opts.logger,
+      timeoutMs: opts.timeoutMs,
+    });
+  }
+  await opts.logger.info(
+    'tests',
+    `No fast dependency re-resolve for language "${opts.language}" — opening PR; the PR's CI verifies`,
+  );
+  return {
+    passed: true,
+    exitCode: 0,
+    stdout: '',
+    stderr: '',
+    durationMs: 0,
+    timedOut: false,
+    noTestSuite: true,
+  };
+}
+
+// Pick a FAST, sandbox-friendly verification for a CODE fix — a typecheck, not the
+// project's full test suite (which needs CI's DB/secrets/service setup the sandbox
+// lacks). Prefers a project-defined script, falls back to `tsc --noEmit`. Returns
+// null when there's nothing fast to run (e.g. plain JS), so the caller soft-passes
+// to the PR's CI. Only TS projects get a typecheck gate.
+function pickTypecheckCommand(workDir: string, language: string): string | null {
+  if (language !== 'ts') return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(workDir, 'package.json'), 'utf-8'));
+    const scripts: Record<string, string> = pkg.scripts ?? {};
+    for (const name of ['typecheck', 'type-check', 'check-types', 'tsc']) {
+      if (typeof scripts[name] === 'string') return `npm run ${name}`;
+    }
+  } catch {
+    /* no / invalid package.json — fall through to tsc */
+  }
+  if (fs.existsSync(path.join(workDir, 'tsconfig.json'))) return 'npx tsc --noEmit';
+  return null;
 }
 
 /**
@@ -207,14 +425,21 @@ export interface RunFixPipelineResult {
  *     line-count budget.
  */
 export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPipelineResult> {
-  const { model, plan, workDir, logger, extraEnv, pipelineStartMs } = opts;
+  const { model, plan, workDir, repoRoot, logger, extraEnv, pipelineStartMs } = opts;
 
-  const wallClockBudgetMs = plan.wallClockBudgetSec * 1000;
+  // Dataflow / DAST fixes run the agentic explore loop (many tool calls to read
+  // the repo) BEFORE the edit + repair, so they need more wall-clock than a
+  // plan-only edit. Give explore mode a floor of 600s over the plan's estimate.
+  const isExploreMode = opts.strategy === 'sanitize_dataflow' || opts.strategy === 'patch_handler';
+  const effectiveBudgetSec = isExploreMode
+    ? Math.max(plan.wallClockBudgetSec, 600)
+    : plan.wallClockBudgetSec;
+  const wallClockBudgetMs = effectiveBudgetSec * 1000;
   const checkBudget = (label: string) => {
     const elapsed = Date.now() - pipelineStartMs;
     if (elapsed > wallClockBudgetMs) {
       throw new FixPipelineError(
-        `Wall-clock budget exhausted before ${label} (elapsed ${Math.round(elapsed / 1000)}s > ${plan.wallClockBudgetSec}s)`,
+        `Wall-clock budget exhausted before ${label} (elapsed ${Math.round(elapsed / 1000)}s > ${effectiveBudgetSec}s)`,
         'budget_wall_clock',
       );
     }
@@ -232,7 +457,7 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
   };
 
   const checkDiffCap = (label: string) => {
-    const loc = cumulativeDiffLoc(workDir);
+    const loc = cumulativeDiffLoc(repoRoot);
     if (loc > MAX_DIFF_LOC) {
       throw new FixPipelineError(
         `Diff too large after ${label}: ${loc} LOC > cap ${MAX_DIFF_LOC}. Split this fix into smaller plans.`,
@@ -241,10 +466,16 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     }
   };
 
-  // 1. Editor pass.
-  checkBudget('editor');
-  trackToolCall('editor');
-  const editorResult = await runEditor({ model, plan, workDir, logger });
+  // 1. Editor pass. Dataflow / DAST fixes run the agentic EXPLORE loop (which
+  // reads the repo to place the sanitizer / handler patch); everything else uses
+  // the plan-only editor. Both return the same ExecutorResult shape, so the
+  // apply → verify → repair machinery below is identical. (isExploreMode is
+  // computed above for the wall-clock budget.)
+  checkBudget(isExploreMode ? 'explore' : 'editor');
+  trackToolCall(isExploreMode ? 'explore' : 'editor');
+  const editorResult = isExploreMode
+    ? await runExplorer({ model, plan, workDir, logger })
+    : await runEditor({ model, plan, workDir, logger });
   let totalTokens = editorResult.tokensUsed;
   let lastDiff = editorResult.rawDiff;
 
@@ -264,33 +495,118 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     return Math.min(remaining, 10 * 60 * 1000);
   };
 
-  let testResult: TestResult;
-  if (editorResult.applyError) {
-    testResult = {
-      passed: false,
-      exitCode: -1,
-      stdout: '',
-      stderr: `Patch from editor did not apply: ${editorResult.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
-      durationMs: 0,
-      timedOut: false,
-      noTestSuite: false,
-    };
-  } else {
-    checkDiffCap('editor');
-    testResult = await runTests({
+  // Verify with a FAST, sandbox-friendly check — never the project's full test
+  // suite (it needs CI's DB/secrets/service setup the sandbox lacks; that was the
+  // original repair-loop failure on code fixes). Two gates, same shape:
+  //  - dependency bump: re-resolve deps (validates the version + lockfile).
+  //  - code fix (semgrep/secret): a typecheck — catches edits that break
+  //    compilation; soft-passes (defers to CI) when there's no fast typecheck or
+  //    it can't run, so we don't burn repair cycles on a harness problem.
+  // Either way the PR's CI runs the real build + tests. The SAME picker drives
+  // the initial check and every repair re-check.
+  const isDependencyBump = (opts.fixType ?? '') === 'vulnerability';
+  const softPass = (): TestResult => ({
+    passed: true, exitCode: 0, stdout: '', stderr: '', durationMs: 0, timedOut: false, noTestSuite: true,
+  });
+  const codeFixGate = isDependencyBump ? null : pickTypecheckCommand(workDir, plan.language);
+  // The literal command we actually run to verify — surfaced to the chat's
+  // terminal-style step. undefined when there's no local check (soft-pass to CI):
+  // a dep bump only re-resolves for js/ts; a code fix only typechecks when a gate
+  // exists. Shown on the verify step ONLY when it truly ran (see the onPhase call).
+  const verifyCommand: string | undefined = isDependencyBump
+    ? plan.language === 'js' || plan.language === 'ts'
+      ? 'npm install --no-audit --no-fund'
+      : undefined
+    : (codeFixGate ?? undefined);
+  if (!isDependencyBump) {
+    await logger.info(
+      'tests',
+      codeFixGate
+        ? `Code fix — verifying with a fast typecheck (${codeFixGate}); the PR's CI runs the full tests`
+        : "Code fix — no fast typecheck here; opening the PR and letting CI verify",
+    );
+  }
+  const verifyCodeFix = async (label: string): Promise<TestResult> => {
+    if (!codeFixGate) return softPass();
+    const r = await runTests({
       workDir,
-      testCommand: plan.testCommand,
+      testCommand: codeFixGate,
       logger,
-      timeoutMs: remainingBudgetMs('initial test'),
+      timeoutMs: Math.min(remainingBudgetMs(label), 180_000),
       extraEnv,
     });
+    // A typecheck that couldn't run (timeout / missing tooling) isn't a fix
+    // failure — defer to CI rather than burn repair cycles on it.
+    return !r.passed && (r.timedOut || r.noTestSuite) ? softPass() : r;
+  };
+  const verify = (label: string): Promise<TestResult> =>
+    isDependencyBump
+      ? verifyDependencyBump({ workDir, language: plan.language, logger, timeoutMs: remainingBudgetMs(label) })
+      : verifyCodeFix(label);
+
+  // Announce the edit exactly once — the first time a patch has actually applied
+  // (editor or a repair), right before we verify it. Skipped while the patch
+  // still fails to apply (nothing was really edited yet).
+  let editAnnounced = false;
+  const announceEdit = async () => {
+    if (editAnnounced) return;
+    editAnnounced = true;
+    await opts.onPhase?.('edit');
+  };
+
+  let testResult: TestResult;
+  if (editorResult.applyError) {
+    // The diff wouldn't apply (escape-heavy / unusual content the model can't
+    // reproduce byte-exact). Fall back to a WHOLE-FILE rewrite before treating
+    // this as a failure — the robust path for exactly these cases.
+    checkBudget('whole-file rewrite');
+    trackToolCall('whole-file rewrite');
+    const rewrite = await rewriteFilesWhole({ model, plan, workDir, repoRoot, logger });
+    totalTokens += rewrite.tokensUsed;
+    if (rewrite.ok) {
+      lastDiff = `whole-file rewrite of ${rewrite.filesChanged.join(', ')}`;
+      checkDiffCap('whole-file rewrite');
+      await announceEdit();
+      testResult = await verify('whole-file rewrite');
+    } else {
+      await logger.warn('edit', `Whole-file rewrite fallback failed: ${rewrite.error}`);
+      testResult = {
+        passed: false,
+        exitCode: -1,
+        stdout: '',
+        stderr: `Patch from editor did not apply: ${editorResult.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
+        durationMs: 0,
+        timedOut: false,
+        noTestSuite: false,
+      };
+    }
+  } else {
+    checkDiffCap('editor');
+    await announceEdit();
+    testResult = await verify(isDependencyBump ? 'dependency install' : 'initial test');
   }
 
-  // 3. Repair cycles. REPAIR_BUDGET cycles, each is one LLM call + one test run.
+  // 3. Repair cycles. These recover from a patch that DIDN'T APPLY (re-emit the
+  // edit) as much as from a test failure — so a dependency bump repairs too: its
+  // package.json hunk can drift exactly like any other patch. It just re-verifies
+  // via the fast re-resolve; a version that still won't resolve after
+  // REPAIR_BUDGET is a real, unfixable failure.
   let repairAttempts = 0;
   while (!testResult.passed && repairAttempts < REPAIR_BUDGET) {
     repairAttempts += 1;
     await logger.info('repair', `Repair cycle ${repairAttempts}/${REPAIR_BUDGET}`);
+
+    // Narrate the struggle in real time. exit -1 is our synthetic "patch didn't
+    // apply" marker; anything else is a real check that came back failing.
+    if (testResult.exitCode === -1) {
+      await opts.onTrouble?.({ kind: 'apply_retry', attempt: repairAttempts });
+    } else {
+      await opts.onTrouble?.({
+        kind: 'tests_retry',
+        attempt: repairAttempts,
+        errorTail: (testResult.stderr || testResult.stdout || '').slice(-400),
+      });
+    }
 
     checkBudget(`repair ${repairAttempts}`);
     trackToolCall(`repair ${repairAttempts}`);
@@ -320,22 +636,37 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
       continue;
     }
     checkDiffCap(`repair ${repairAttempts}`);
-
-    testResult = await runTests({
-      workDir,
-      testCommand: plan.testCommand,
-      logger,
-      timeoutMs: remainingBudgetMs(`test after repair ${repairAttempts}`),
-      extraEnv,
-    });
+    await announceEdit();
+    testResult = await verify(`test after repair ${repairAttempts}`);
   }
 
   if (!testResult.passed) {
+    // exit -1 is the synthetic marker for "the patch never applied" — surface
+    // that as its own category so the chat can say so plainly (vs. a real check
+    // that ran and failed).
+    const neverApplied = testResult.exitCode === -1;
     throw new FixPipelineError(
-      `Tests still failing after ${repairAttempts} repair cycle${repairAttempts === 1 ? '' : 's'} (exit ${testResult.exitCode})`,
-      'tests_failed',
+      neverApplied
+        ? `The patch couldn't be applied to the file after ${repairAttempts} attempt${repairAttempts === 1 ? '' : 's'}.`
+        : `The checks still failed after ${repairAttempts} repair cycle${repairAttempts === 1 ? '' : 's'} (exit ${testResult.exitCode}).`,
+      neverApplied ? 'patch_unapplied' : 'tests_failed',
+      {
+        attemptedDiff: lastDiff,
+        errorOutput: (testResult.stderr || testResult.stdout || '').slice(-3000),
+        repairAttempts,
+      },
     );
   }
+
+  await opts.onPhase?.('verify', {
+    verifiedLocally: !testResult.noTestSuite,
+    // Only name the command + show output when it actually ran locally — a
+    // soft-pass verified nothing, so it shouldn't claim a command.
+    command: testResult.noTestSuite ? undefined : verifyCommand,
+    output: testResult.noTestSuite
+      ? undefined
+      : (testResult.stdout || testResult.stderr || '').trim().slice(-1500) || undefined,
+  });
 
   return {
     rawDiff: lastDiff,

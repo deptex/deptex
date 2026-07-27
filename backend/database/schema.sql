@@ -25,6 +25,28 @@ CREATE TABLE IF NOT EXISTS public.activities (
   metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.aegis_agent_tasks (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid,
+  created_by uuid,
+  thread_id uuid,
+  kind text NOT NULL DEFAULT 'fix'::text,
+  title text NOT NULL,
+  description text,
+  status text NOT NULL DEFAULT 'proposed'::text,
+  source text NOT NULL DEFAULT 'chat'::text,
+  targets jsonb NOT NULL DEFAULT '[]'::jsonb,
+  total_fixes integer NOT NULL DEFAULT 0,
+  completed_fixes integer NOT NULL DEFAULT 0,
+  failed_fixes integer NOT NULL DEFAULT 0,
+  summary text,
+  accepted_at timestamp with time zone,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.aegis_chat_invite_codes (
   thread_id uuid NOT NULL,
   code text NOT NULL,
@@ -1160,12 +1182,15 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_files (
   created_at timestamp with time zone DEFAULT now(),
   extraction_run_id text
 );
-CREATE TABLE IF NOT EXISTS public.project_dependency_functions (
+CREATE TABLE IF NOT EXISTS public.project_dependency_finding_events (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_dependency_id uuid,
-  function_name text NOT NULL,
+  project_id uuid NOT NULL,
+  osv_id text NOT NULL,
+  event_type text NOT NULL,
+  metadata jsonb,
   created_at timestamp with time zone DEFAULT now(),
-  extraction_run_id text
+  extraction_run_id text,
+  project_dependency_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_dependency_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1231,6 +1256,13 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_findings (
   auto_ignored boolean NOT NULL DEFAULT false,
   auto_ignore_reason text,
   resolved_at timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.project_dependency_functions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_dependency_id uuid,
+  function_name text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  extraction_run_id text
 );
 CREATE TABLE IF NOT EXISTS public.project_entry_points (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1641,7 +1673,16 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   rejected_by_user_id uuid,
   rejection_reason text,
   malicious_finding_id uuid,
-  thread_id uuid
+  thread_id uuid,
+  task_id uuid,
+  iac_finding_id uuid,
+  container_finding_id uuid,
+  base_image_rec_id uuid,
+  dast_finding_id uuid,
+  reachable_flow_id uuid,
+  failure_details jsonb,
+  run_seq integer NOT NULL DEFAULT 0,
+  agent_run_stats jsonb
 );
 CREATE TABLE IF NOT EXISTS public.project_security_summaries (
   project_id uuid NOT NULL,
@@ -1733,16 +1774,6 @@ CREATE TABLE IF NOT EXISTS public.project_version_candidates (
   published_at timestamp with time zone,
   verified_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.project_dependency_finding_events (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_id uuid NOT NULL,
-  osv_id text NOT NULL,
-  event_type text NOT NULL,
-  metadata jsonb,
-  created_at timestamp with time zone DEFAULT now(),
-  extraction_run_id text,
-  project_dependency_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -4413,6 +4444,111 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_dependency_finding_detail_bundle(p_project_id uuid, p_osv_id text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+WITH proj AS (
+  SELECT organization_id, active_extraction_run_id, importance
+  FROM projects
+  WHERE id = p_project_id
+),
+pdv AS (
+  SELECT *
+  FROM project_dependency_findings v
+  WHERE v.project_id = p_project_id
+    AND v.osv_id = p_osv_id
+    AND v.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+),
+deps AS (
+  SELECT pd.id, pd.name, pd.version, pd.is_direct, pd.dependency_id,
+         pd.files_importing_count, pd.environment
+  FROM project_dependencies pd
+  WHERE pd.id IN (SELECT v.project_dependency_id FROM pdv v WHERE v.project_dependency_id IS NOT NULL)
+    AND pd.removed_at IS NULL
+),
+advisory AS (
+  SELECT dv.summary, dv.details, dv.aliases, dv.affected_versions,
+         dv.fixed_versions, dv.published_at, dv.modified_at
+  FROM dependency_vulnerabilities dv
+  WHERE dv.osv_id = p_osv_id OR dv.aliases @> ARRAY[p_osv_id]
+  ORDER BY (dv.osv_id = p_osv_id) DESC
+  LIMIT 1
+),
+flow_osv_ids AS (
+  SELECT p_osv_id AS osv_id
+  UNION
+  SELECT unnest(COALESCE((SELECT v.aliases FROM pdv v LIMIT 1), '{}'::text[]))
+  UNION
+  SELECT unnest(COALESCE((SELECT a.aliases FROM advisory a), '{}'::text[]))
+),
+flows AS (
+  SELECT f.*
+  FROM project_reachable_flows f
+  WHERE f.project_id = p_project_id
+    AND f.dependency_id IN (SELECT d.dependency_id FROM deps d WHERE d.dependency_id IS NOT NULL)
+    AND f.osv_id IN (SELECT osv_id FROM flow_osv_ids)
+    AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+  ORDER BY f.flow_length ASC
+  LIMIT 20
+)
+SELECT jsonb_build_object(
+  'importance', (SELECT importance FROM proj),
+  'vulnerabilities', COALESCE((SELECT jsonb_agg(to_jsonb(v)) FROM pdv v), '[]'::jsonb),
+  'affected_dependencies', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(d) || jsonb_build_object(
+        'files', COALESCE((
+          SELECT jsonb_agg(f.file_path)
+          FROM project_dependency_files f
+          WHERE f.project_dependency_id = d.id
+            AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+        ), '[]'::jsonb),
+        'package_score', (SELECT COALESCE(dd.score, 0) FROM dependencies dd WHERE dd.id = d.dependency_id)
+      )
+    )
+    FROM deps d
+  ), '[]'::jsonb),
+  'version_candidates', COALESCE((
+    SELECT jsonb_agg(to_jsonb(c))
+    FROM project_version_candidates c
+    WHERE c.project_id = p_project_id
+      AND c.package_name = (SELECT d.name FROM deps d LIMIT 1)
+  ), '[]'::jsonb),
+  'timeline_events', COALESCE((
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at DESC)
+    FROM (
+      SELECT *
+      FROM project_dependency_finding_events ev
+      WHERE ev.project_id = p_project_id
+        AND ev.osv_id = p_osv_id
+      ORDER BY ev.created_at DESC
+      LIMIT 50
+    ) e
+  ), '[]'::jsonb),
+  'advisory', (SELECT to_jsonb(a) FROM advisory a),
+  'reachable_flows', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(fl) || jsonb_build_object(
+        'is_suppressed',
+        CASE
+          WHEN fl.flow_signature_hash IS NULL THEN false
+          ELSE EXISTS (
+            SELECT 1 FROM project_reachable_flow_suppressions s
+            WHERE s.project_id = p_project_id
+              AND s.flow_signature_hash = fl.flow_signature_hash
+          )
+        END
+      )
+      ORDER BY fl.flow_length ASC
+    )
+    FROM flows fl
+  ), '[]'::jsonb)
+);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_effective_sla_policy(p_organization_id uuid, p_severity text)
  RETURNS TABLE(max_hours integer, warning_threshold_percent integer)
  LANGUAGE sql
@@ -4599,111 +4735,6 @@ AS $function$
     and (p_features is null or bt.feature = any (p_features))
     and (p_project_ids is null or bt.project_id = any (p_project_ids))
   group by 1, bt.feature, bt.event_type;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION public.get_dependency_finding_detail_bundle(p_project_id uuid, p_osv_id text)
- RETURNS jsonb
- LANGUAGE sql
- STABLE
-AS $function$
-WITH proj AS (
-  SELECT organization_id, active_extraction_run_id, importance
-  FROM projects
-  WHERE id = p_project_id
-),
-pdv AS (
-  SELECT *
-  FROM project_dependency_findings v
-  WHERE v.project_id = p_project_id
-    AND v.osv_id = p_osv_id
-    AND v.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-),
-deps AS (
-  SELECT pd.id, pd.name, pd.version, pd.is_direct, pd.dependency_id,
-         pd.files_importing_count, pd.environment
-  FROM project_dependencies pd
-  WHERE pd.id IN (SELECT v.project_dependency_id FROM pdv v WHERE v.project_dependency_id IS NOT NULL)
-    AND pd.removed_at IS NULL
-),
-advisory AS (
-  SELECT dv.summary, dv.details, dv.aliases, dv.affected_versions,
-         dv.fixed_versions, dv.published_at, dv.modified_at
-  FROM dependency_vulnerabilities dv
-  WHERE dv.osv_id = p_osv_id OR dv.aliases @> ARRAY[p_osv_id]
-  ORDER BY (dv.osv_id = p_osv_id) DESC
-  LIMIT 1
-),
-flow_osv_ids AS (
-  SELECT p_osv_id AS osv_id
-  UNION
-  SELECT unnest(COALESCE((SELECT v.aliases FROM pdv v LIMIT 1), '{}'::text[]))
-  UNION
-  SELECT unnest(COALESCE((SELECT a.aliases FROM advisory a), '{}'::text[]))
-),
-flows AS (
-  SELECT f.*
-  FROM project_reachable_flows f
-  WHERE f.project_id = p_project_id
-    AND f.dependency_id IN (SELECT d.dependency_id FROM deps d WHERE d.dependency_id IS NOT NULL)
-    AND f.osv_id IN (SELECT osv_id FROM flow_osv_ids)
-    AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-  ORDER BY f.flow_length ASC
-  LIMIT 20
-)
-SELECT jsonb_build_object(
-  'importance', (SELECT importance FROM proj),
-  'vulnerabilities', COALESCE((SELECT jsonb_agg(to_jsonb(v)) FROM pdv v), '[]'::jsonb),
-  'affected_dependencies', COALESCE((
-    SELECT jsonb_agg(
-      to_jsonb(d) || jsonb_build_object(
-        'files', COALESCE((
-          SELECT jsonb_agg(f.file_path)
-          FROM project_dependency_files f
-          WHERE f.project_dependency_id = d.id
-            AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-        ), '[]'::jsonb),
-        'package_score', (SELECT COALESCE(dd.score, 0) FROM dependencies dd WHERE dd.id = d.dependency_id)
-      )
-    )
-    FROM deps d
-  ), '[]'::jsonb),
-  'version_candidates', COALESCE((
-    SELECT jsonb_agg(to_jsonb(c))
-    FROM project_version_candidates c
-    WHERE c.project_id = p_project_id
-      AND c.package_name = (SELECT d.name FROM deps d LIMIT 1)
-  ), '[]'::jsonb),
-  'timeline_events', COALESCE((
-    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at DESC)
-    FROM (
-      SELECT *
-      FROM project_dependency_finding_events ev
-      WHERE ev.project_id = p_project_id
-        AND ev.osv_id = p_osv_id
-      ORDER BY ev.created_at DESC
-      LIMIT 50
-    ) e
-  ), '[]'::jsonb),
-  'advisory', (SELECT to_jsonb(a) FROM advisory a),
-  'reachable_flows', COALESCE((
-    SELECT jsonb_agg(
-      to_jsonb(fl) || jsonb_build_object(
-        'is_suppressed',
-        CASE
-          WHEN fl.flow_signature_hash IS NULL THEN false
-          ELSE EXISTS (
-            SELECT 1 FROM project_reachable_flow_suppressions s
-            WHERE s.project_id = p_project_id
-              AND s.flow_signature_hash = fl.flow_signature_hash
-          )
-        END
-      )
-      ORDER BY fl.flow_length ASC
-    )
-    FROM flows fl
-  ), '[]'::jsonb)
-);
 $function$
 ;
 
@@ -5782,6 +5813,39 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.recompute_aegis_task_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_task uuid := NEW.task_id; v_planned int; v_status text;
+        v_total int; v_done int; v_failed int; v_open int;
+BEGIN
+  SELECT total_fixes, status INTO v_planned, v_status FROM public.aegis_agent_tasks WHERE id = v_task;
+  IF v_task IS NULL OR v_status IN ('declined','cancelled') THEN RETURN NEW; END IF;
+  SELECT count(*),
+         count(*) FILTER (WHERE status='completed'),
+         count(*) FILTER (WHERE status IN ('failed','rejected')),
+         count(*) FILTER (WHERE status IN ('planning','awaiting_approval','approved','executing'))
+    INTO v_total, v_done, v_failed, v_open
+    FROM public.project_security_fixes WHERE task_id = v_task;
+  UPDATE public.aegis_agent_tasks SET
+    completed_fixes = v_done, failed_fixes = v_failed,
+    status = CASE
+      WHEN v_open > 0 OR v_total < v_planned THEN 'working'
+      WHEN v_failed = 0 THEN 'completed'
+      WHEN v_done   = 0 THEN 'failed'
+      ELSE 'completed_with_failures' END,
+    completed_at = CASE WHEN v_open = 0 AND v_total >= v_planned THEN now() ELSE completed_at END,
+    updated_at = now()
+   WHERE id = v_task;
+  IF v_open = 0 AND v_total >= v_planned AND v_failed = 0 THEN
+    UPDATE public.finding_tracker_links SET external_state='done', external_state_synced_at=now()
+     WHERE provider='aegis' AND external_id = v_task::text;
+  END IF;
+  RETURN NEW;
+END; $function$
+;
+
 CREATE OR REPLACE FUNCTION public.recompute_all_project_summaries(p_stale_before timestamp with time zone DEFAULT NULL::timestamp with time zone)
  RETURNS integer
  LANGUAGE plpgsql
@@ -6657,6 +6721,13 @@ BEGIN
 END $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.update_aegis_agent_tasks_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN NEW.updated_at = now(); RETURN NEW; END; $function$
+;
+
 CREATE OR REPLACE FUNCTION public.update_aegis_chat_threads_updated_at()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -7109,10 +7180,71 @@ CREATE OR REPLACE FUNCTION public.vector(vector, integer, boolean)
 AS '$libdir/vector', $function$vector$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.wake_agent_fix(p_fix_id uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_id uuid;
+  v_task uuid;
+BEGIN
+  UPDATE public.project_security_fixes psf
+    SET status = 'approved',
+        attempts = 0,
+        machine_id = NULL,
+        heartbeat_at = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        error_message = NULL,
+        error_category = NULL,
+        failure_details = NULL,
+        rejected_at = NULL,
+        rejected_by_user_id = NULL,
+        rejection_reason = NULL,
+        approved_at = NOW(),
+        run_seq = psf.run_seq + 1,
+        -- plan.resume flags the worker's replay path; plan.prior_status lets a
+        -- Stop of a resume-of-completed restore the original success instead of
+        -- downgrading it to failed. (SET expressions read OLD column values.)
+        plan = COALESCE(psf.plan, '{}'::jsonb)
+                 || jsonb_build_object('resume', true, 'prior_status', psf.status)
+    WHERE psf.id = p_fix_id
+      AND psf.strategy = 'agent'
+      AND psf.status IN ('completed', 'failed', 'rejected')
+    RETURNING psf.id, psf.task_id INTO v_id, v_task;
+
+  IF v_id IS NULL THEN
+    RETURN NULL;  -- active run / already queued / non-agent: no-op
+  END IF;
+
+  IF v_task IS NOT NULL THEN
+    -- Re-open the task. The status flip above already fired the rollup trigger
+    -- (v_open>0 -> 'working'), but the trigger keeps the stale completed_at and
+    -- early-returns entirely for user-terminal ('cancelled'/'declined') tasks —
+    -- both handled here.
+    UPDATE public.aegis_agent_tasks
+      SET status = CASE WHEN status IN ('cancelled', 'declined') THEN 'working' ELSE status END,
+          completed_at = NULL,
+          updated_at = NOW()
+      WHERE id = v_task;
+    -- Un-green the chips while the resume runs; the trigger re-flips them to
+    -- 'done' only when the resume lands cleanly.
+    UPDATE public.finding_tracker_links
+      SET external_state = 'open', external_state_synced_at = NOW()
+      WHERE provider = 'aegis' AND external_id = v_task::text;
+  END IF;
+
+  RETURN v_id;
+END;
+$function$
+;
+
+
 -- ============================================
 -- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
 -- ============================================
 ALTER TABLE public.activities ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_pkey PRIMARY KEY (thread_id);
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
@@ -7194,8 +7326,9 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_pk
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_pkey PRIMARY KEY (id);
@@ -7221,7 +7354,6 @@ ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findi
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_pkey PRIMARY KEY (id);
 ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
@@ -7293,8 +7425,8 @@ ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credenti
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_target_url_key UNIQUE (project_id, target_url);
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_name_version_is_direct_sour_key UNIQUE (project_id, name, version, is_direct, source);
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgeme_project_id_finding_type_findi_key UNIQUE (project_id, finding_type, finding_key);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppres_project_id_group_type_group_k_key UNIQUE (project_id, group_type, group_key);
@@ -7326,6 +7458,9 @@ ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notificatio
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_kind_chk CHECK ((kind = 'fix'::text));
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_source_chk CHECK ((source = ANY (ARRAY['chat'::text, 'finding'::text])));
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_status_chk CHECK ((status = ANY (ARRAY['proposed'::text, 'working'::text, 'completed'::text, 'completed_with_failures'::text, 'failed'::text, 'declined'::text, 'cancelled'::text, 'needs_input'::text])));
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = 'platform'::text)) NOT VALID;
 ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_attribution_resource_type_check CHECK ((attribution_resource_type = ANY (ARRAY['aegis_chat'::text, 'scan_job'::text, 'fix_task'::text, 'rule_generation'::text, 'epd_scoring'::text])));
@@ -7345,7 +7480,7 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_errors_severity CHECK ((severity = ANY (ARRAY['warn'::text, 'error'::text])));
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
-ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_provider_chk CHECK ((provider = ANY (ARRAY['jira'::text, 'linear'::text, 'github'::text])));
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_provider_chk CHECK ((provider = ANY (ARRAY['jira'::text, 'linear'::text, 'github'::text, 'aegis'::text])));
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_type_chk CHECK ((finding_type = ANY (ARRAY['vulnerability'::text, 'secret'::text, 'semgrep'::text, 'iac'::text, 'container'::text, 'dast'::text, 'malicious'::text, 'taint_flow'::text])));
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
@@ -7428,9 +7563,9 @@ ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_excep
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_level_check CHECK (((slsa_level IS NULL) OR ((slsa_level >= 1) AND (slsa_level <= 4))));
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
 ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_reachability_source_check CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text, 'taint_engine'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text, 'iac'::text, 'container'::text, 'base_image'::text, 'dataflow'::text, 'dast'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text, 'approved'::text, 'executing'::text, 'completed'::text, 'failed'::text, 'rejected'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text, 'fix_iac'::text, 'bump_base_image'::text, 'sanitize_dataflow'::text, 'patch_handler'::text, 'agent'::text])));
 ALTER TABLE public.projects ADD CONSTRAINT chk_importance_range CHECK (((importance >= 0.5) AND (importance <= 2.0)));
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_badge_check CHECK ((health_badge = ANY (ARRAY['healthy'::text, 'at_risk'::text, 'critical'::text, 'no_data'::text])));
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
@@ -7452,6 +7587,10 @@ ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_agent_tasks ADD CONSTRAINT aegis_agent_tasks_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
@@ -7596,10 +7735,12 @@ ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_proj
 ALTER TABLE public.project_dependencies ADD CONSTRAINT fk_project_dependencies_version FOREIGN KEY (dependency_version_id) REFERENCES dependency_versions(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_runtime_confirmed_dast_fkey FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -7650,6 +7791,7 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_task_id_fkey FOREIGN KEY (task_id) REFERENCES aegis_agent_tasks(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7659,8 +7801,6 @@ ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FO
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.projects ADD CONSTRAINT projects_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -7721,6 +7861,7 @@ CREATE INDEX idx_activities_metadata ON public.activities USING gin (metadata);
 CREATE INDEX idx_activities_org_type_date ON public.activities USING btree (organization_id, activity_type, created_at DESC);
 CREATE INDEX idx_activities_organization_id ON public.activities USING btree (organization_id);
 CREATE INDEX idx_activities_user_id ON public.activities USING btree (user_id);
+CREATE INDEX idx_aegis_agent_tasks_org_created ON public.aegis_agent_tasks USING btree (organization_id, created_at DESC);
 CREATE INDEX idx_aegis_chat_invite_codes_active_code ON public.aegis_chat_invite_codes USING btree (code) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_aegis_chat_messages_created_at ON public.aegis_chat_messages USING btree (created_at DESC);
 CREATE INDEX idx_aegis_chat_messages_thread_id ON public.aegis_chat_messages USING btree (thread_id);
@@ -7787,6 +7928,7 @@ CREATE INDEX idx_finding_group_suppressions_project ON public.project_finding_gr
 CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_finding ON public.finding_tracker_links USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_org ON public.finding_tracker_links USING btree (organization_id);
+CREATE INDEX idx_ftl_provider_external ON public.finding_tracker_links USING btree (provider, external_id);
 CREATE INDEX idx_iac_project_finding_key ON public.project_iac_findings USING btree (project_id, finding_key);
 CREATE INDEX idx_iac_project_status ON public.project_iac_findings USING btree (project_id, status);
 CREATE INDEX idx_invitation_teams_invitation_id ON public.invitation_teams USING btree (invitation_id);
@@ -7941,12 +8083,12 @@ CREATE INDEX idx_project_dependencies_policy_result ON public.project_dependenci
 CREATE INDEX idx_project_dependencies_project_id ON public.project_dependencies USING btree (project_id);
 CREATE INDEX idx_project_dependencies_project_id_dependency_id ON public.project_dependencies USING btree (project_id, dependency_id);
 CREATE INDEX idx_project_dependency_files_project_dependency_id ON public.project_dependency_files USING btree (project_dependency_id);
-CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
-CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
 CREATE INDEX idx_project_dependency_findings_osv_id ON public.project_dependency_findings USING btree (osv_id);
 CREATE INDEX idx_project_dependency_findings_project_dependency_id ON public.project_dependency_findings USING btree (project_dependency_id);
 CREATE INDEX idx_project_dependency_findings_project_id ON public.project_dependency_findings USING btree (project_id);
 CREATE INDEX idx_project_dependency_findings_severity ON public.project_dependency_findings USING btree (severity);
+CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
+CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
 CREATE INDEX idx_project_integrations_project_id ON public.project_integrations USING btree (project_id);
 CREATE INDEX idx_project_integrations_provider ON public.project_integrations USING btree (provider);
 CREATE INDEX idx_project_integrations_status ON public.project_integrations USING btree (status);
@@ -8001,6 +8143,7 @@ CREATE INDEX idx_psf_project_status ON public.project_security_fixes USING btree
 CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extraction_run_id);
 CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
 CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
+CREATE INDEX idx_psf_task_id ON public.project_security_fixes USING btree (task_id) WHERE (task_id IS NOT NULL);
 CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
 CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);
@@ -8093,6 +8236,8 @@ CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_da
 CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
+CREATE UNIQUE INDEX uq_aegis_agent_tasks_thread ON public.aegis_agent_tasks USING btree (thread_id) WHERE (thread_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_agent_fix_per_task_finding ON public.project_security_fixes USING btree (task_id, fix_type, COALESCE(osv_id, (semgrep_finding_id)::text, (secret_finding_id)::text, (iac_finding_id)::text, (container_finding_id)::text, (base_image_rec_id)::text, (dast_finding_id)::text, (reachable_flow_id)::text, (malicious_finding_id)::text, ''::text)) WHERE ((strategy = 'agent'::text) AND (task_id IS NOT NULL));
 CREATE UNIQUE INDEX uq_billing_transactions_org_idemp ON public.billing_transactions USING btree (organization_id, idempotency_key) WHERE (idempotency_key IS NOT NULL);
 CREATE UNIQUE INDEX uq_billing_transactions_pi_credit ON public.billing_transactions USING btree (stripe_payment_intent_id) WHERE ((stripe_payment_intent_id IS NOT NULL) AND (kind = ANY (ARRAY['topup'::text, 'auto_recharge_topup'::text])));
 
@@ -8115,6 +8260,7 @@ CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_i
 CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_native_bindings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
+CREATE TRIGGER trg_aegis_agent_tasks_updated_at BEFORE UPDATE ON public.aegis_agent_tasks FOR EACH ROW EXECUTE FUNCTION update_aegis_agent_tasks_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
 CREATE TRIGGER trg_container_finding_status BEFORE INSERT OR UPDATE ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION trg_container_finding_status();
 CREATE TRIGGER trg_dast_finding_status BEFORE INSERT OR UPDATE ON public.project_dast_findings FOR EACH ROW EXECUTE FUNCTION trg_dast_finding_status();
@@ -8124,6 +8270,7 @@ CREATE TRIGGER trg_org_policy_rules_updated_at BEFORE UPDATE ON public.organizat
 CREATE TRIGGER trg_organizations_after_insert_billing AFTER INSERT ON public.organizations FOR EACH ROW EXECUTE FUNCTION create_organization_billing_row();
 CREATE TRIGGER trg_pdv_finding_status BEFORE INSERT OR UPDATE ON public.project_dependency_findings FOR EACH ROW EXECUTE FUNCTION trg_pdv_finding_status();
 CREATE TRIGGER trg_project_repositories_fill_organization_id BEFORE INSERT OR UPDATE ON public.project_repositories FOR EACH ROW EXECUTE FUNCTION fill_project_repositories_organization_id();
+CREATE TRIGGER trg_recompute_aegis_task_status AFTER INSERT OR UPDATE OF status ON public.project_security_fixes FOR EACH ROW WHEN ((new.task_id IS NOT NULL)) EXECUTE FUNCTION recompute_aegis_task_status();
 CREATE TRIGGER trg_secret_finding_status BEFORE INSERT OR UPDATE ON public.project_secret_findings FOR EACH ROW EXECUTE FUNCTION trg_secret_finding_status();
 CREATE TRIGGER trg_semgrep_finding_status BEFORE INSERT OR UPDATE ON public.project_semgrep_findings FOR EACH ROW EXECUTE FUNCTION trg_semgrep_finding_status();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();

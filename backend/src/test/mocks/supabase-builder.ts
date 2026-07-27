@@ -76,9 +76,12 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
     lte: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
     then: jest.fn().mockImplementation(function (this: any, resolve: any) {
-      const r = registry[this._table]?.then;
-      if (r !== undefined) return resolve(r);
-      return resolve({ data: [], error: null });
+      const r = registry[this._table]?.then ?? { data: [], error: null };
+      // `.then(undefined, onRejected)` (fire-and-forget inserts like
+      // postTaskOpeningMessage) must pass the value through like a real
+      // Promise instead of calling undefined as a function.
+      if (typeof resolve !== 'function') return Promise.resolve(r);
+      return resolve(r);
     }),
   };
 
