@@ -1182,12 +1182,15 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_files (
   created_at timestamp with time zone DEFAULT now(),
   extraction_run_id text
 );
-CREATE TABLE IF NOT EXISTS public.project_dependency_functions (
+CREATE TABLE IF NOT EXISTS public.project_dependency_finding_events (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_dependency_id uuid,
-  function_name text NOT NULL,
+  project_id uuid NOT NULL,
+  osv_id text NOT NULL,
+  event_type text NOT NULL,
+  metadata jsonb,
   created_at timestamp with time zone DEFAULT now(),
-  extraction_run_id text
+  extraction_run_id text,
+  project_dependency_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_dependency_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1253,6 +1256,13 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_findings (
   auto_ignored boolean NOT NULL DEFAULT false,
   auto_ignore_reason text,
   resolved_at timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.project_dependency_functions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_dependency_id uuid,
+  function_name text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  extraction_run_id text
 );
 CREATE TABLE IF NOT EXISTS public.project_entry_points (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1764,16 +1774,6 @@ CREATE TABLE IF NOT EXISTS public.project_version_candidates (
   published_at timestamp with time zone,
   verified_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.project_dependency_finding_events (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_id uuid NOT NULL,
-  osv_id text NOT NULL,
-  event_type text NOT NULL,
-  metadata jsonb,
-  created_at timestamp with time zone DEFAULT now(),
-  extraction_run_id text,
-  project_dependency_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -4444,6 +4444,111 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_dependency_finding_detail_bundle(p_project_id uuid, p_osv_id text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+WITH proj AS (
+  SELECT organization_id, active_extraction_run_id, importance
+  FROM projects
+  WHERE id = p_project_id
+),
+pdv AS (
+  SELECT *
+  FROM project_dependency_findings v
+  WHERE v.project_id = p_project_id
+    AND v.osv_id = p_osv_id
+    AND v.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+),
+deps AS (
+  SELECT pd.id, pd.name, pd.version, pd.is_direct, pd.dependency_id,
+         pd.files_importing_count, pd.environment
+  FROM project_dependencies pd
+  WHERE pd.id IN (SELECT v.project_dependency_id FROM pdv v WHERE v.project_dependency_id IS NOT NULL)
+    AND pd.removed_at IS NULL
+),
+advisory AS (
+  SELECT dv.summary, dv.details, dv.aliases, dv.affected_versions,
+         dv.fixed_versions, dv.published_at, dv.modified_at
+  FROM dependency_vulnerabilities dv
+  WHERE dv.osv_id = p_osv_id OR dv.aliases @> ARRAY[p_osv_id]
+  ORDER BY (dv.osv_id = p_osv_id) DESC
+  LIMIT 1
+),
+flow_osv_ids AS (
+  SELECT p_osv_id AS osv_id
+  UNION
+  SELECT unnest(COALESCE((SELECT v.aliases FROM pdv v LIMIT 1), '{}'::text[]))
+  UNION
+  SELECT unnest(COALESCE((SELECT a.aliases FROM advisory a), '{}'::text[]))
+),
+flows AS (
+  SELECT f.*
+  FROM project_reachable_flows f
+  WHERE f.project_id = p_project_id
+    AND f.dependency_id IN (SELECT d.dependency_id FROM deps d WHERE d.dependency_id IS NOT NULL)
+    AND f.osv_id IN (SELECT osv_id FROM flow_osv_ids)
+    AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+  ORDER BY f.flow_length ASC
+  LIMIT 20
+)
+SELECT jsonb_build_object(
+  'importance', (SELECT importance FROM proj),
+  'vulnerabilities', COALESCE((SELECT jsonb_agg(to_jsonb(v)) FROM pdv v), '[]'::jsonb),
+  'affected_dependencies', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(d) || jsonb_build_object(
+        'files', COALESCE((
+          SELECT jsonb_agg(f.file_path)
+          FROM project_dependency_files f
+          WHERE f.project_dependency_id = d.id
+            AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+        ), '[]'::jsonb),
+        'package_score', (SELECT COALESCE(dd.score, 0) FROM dependencies dd WHERE dd.id = d.dependency_id)
+      )
+    )
+    FROM deps d
+  ), '[]'::jsonb),
+  'version_candidates', COALESCE((
+    SELECT jsonb_agg(to_jsonb(c))
+    FROM project_version_candidates c
+    WHERE c.project_id = p_project_id
+      AND c.package_name = (SELECT d.name FROM deps d LIMIT 1)
+  ), '[]'::jsonb),
+  'timeline_events', COALESCE((
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at DESC)
+    FROM (
+      SELECT *
+      FROM project_dependency_finding_events ev
+      WHERE ev.project_id = p_project_id
+        AND ev.osv_id = p_osv_id
+      ORDER BY ev.created_at DESC
+      LIMIT 50
+    ) e
+  ), '[]'::jsonb),
+  'advisory', (SELECT to_jsonb(a) FROM advisory a),
+  'reachable_flows', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(fl) || jsonb_build_object(
+        'is_suppressed',
+        CASE
+          WHEN fl.flow_signature_hash IS NULL THEN false
+          ELSE EXISTS (
+            SELECT 1 FROM project_reachable_flow_suppressions s
+            WHERE s.project_id = p_project_id
+              AND s.flow_signature_hash = fl.flow_signature_hash
+          )
+        END
+      )
+      ORDER BY fl.flow_length ASC
+    )
+    FROM flows fl
+  ), '[]'::jsonb)
+);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_effective_sla_policy(p_organization_id uuid, p_severity text)
  RETURNS TABLE(max_hours integer, warning_threshold_percent integer)
  LANGUAGE sql
@@ -4630,111 +4735,6 @@ AS $function$
     and (p_features is null or bt.feature = any (p_features))
     and (p_project_ids is null or bt.project_id = any (p_project_ids))
   group by 1, bt.feature, bt.event_type;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION public.get_dependency_finding_detail_bundle(p_project_id uuid, p_osv_id text)
- RETURNS jsonb
- LANGUAGE sql
- STABLE
-AS $function$
-WITH proj AS (
-  SELECT organization_id, active_extraction_run_id, importance
-  FROM projects
-  WHERE id = p_project_id
-),
-pdv AS (
-  SELECT *
-  FROM project_dependency_findings v
-  WHERE v.project_id = p_project_id
-    AND v.osv_id = p_osv_id
-    AND v.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-),
-deps AS (
-  SELECT pd.id, pd.name, pd.version, pd.is_direct, pd.dependency_id,
-         pd.files_importing_count, pd.environment
-  FROM project_dependencies pd
-  WHERE pd.id IN (SELECT v.project_dependency_id FROM pdv v WHERE v.project_dependency_id IS NOT NULL)
-    AND pd.removed_at IS NULL
-),
-advisory AS (
-  SELECT dv.summary, dv.details, dv.aliases, dv.affected_versions,
-         dv.fixed_versions, dv.published_at, dv.modified_at
-  FROM dependency_vulnerabilities dv
-  WHERE dv.osv_id = p_osv_id OR dv.aliases @> ARRAY[p_osv_id]
-  ORDER BY (dv.osv_id = p_osv_id) DESC
-  LIMIT 1
-),
-flow_osv_ids AS (
-  SELECT p_osv_id AS osv_id
-  UNION
-  SELECT unnest(COALESCE((SELECT v.aliases FROM pdv v LIMIT 1), '{}'::text[]))
-  UNION
-  SELECT unnest(COALESCE((SELECT a.aliases FROM advisory a), '{}'::text[]))
-),
-flows AS (
-  SELECT f.*
-  FROM project_reachable_flows f
-  WHERE f.project_id = p_project_id
-    AND f.dependency_id IN (SELECT d.dependency_id FROM deps d WHERE d.dependency_id IS NOT NULL)
-    AND f.osv_id IN (SELECT osv_id FROM flow_osv_ids)
-    AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-  ORDER BY f.flow_length ASC
-  LIMIT 20
-)
-SELECT jsonb_build_object(
-  'importance', (SELECT importance FROM proj),
-  'vulnerabilities', COALESCE((SELECT jsonb_agg(to_jsonb(v)) FROM pdv v), '[]'::jsonb),
-  'affected_dependencies', COALESCE((
-    SELECT jsonb_agg(
-      to_jsonb(d) || jsonb_build_object(
-        'files', COALESCE((
-          SELECT jsonb_agg(f.file_path)
-          FROM project_dependency_files f
-          WHERE f.project_dependency_id = d.id
-            AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
-        ), '[]'::jsonb),
-        'package_score', (SELECT COALESCE(dd.score, 0) FROM dependencies dd WHERE dd.id = d.dependency_id)
-      )
-    )
-    FROM deps d
-  ), '[]'::jsonb),
-  'version_candidates', COALESCE((
-    SELECT jsonb_agg(to_jsonb(c))
-    FROM project_version_candidates c
-    WHERE c.project_id = p_project_id
-      AND c.package_name = (SELECT d.name FROM deps d LIMIT 1)
-  ), '[]'::jsonb),
-  'timeline_events', COALESCE((
-    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at DESC)
-    FROM (
-      SELECT *
-      FROM project_dependency_finding_events ev
-      WHERE ev.project_id = p_project_id
-        AND ev.osv_id = p_osv_id
-      ORDER BY ev.created_at DESC
-      LIMIT 50
-    ) e
-  ), '[]'::jsonb),
-  'advisory', (SELECT to_jsonb(a) FROM advisory a),
-  'reachable_flows', COALESCE((
-    SELECT jsonb_agg(
-      to_jsonb(fl) || jsonb_build_object(
-        'is_suppressed',
-        CASE
-          WHEN fl.flow_signature_hash IS NULL THEN false
-          ELSE EXISTS (
-            SELECT 1 FROM project_reachable_flow_suppressions s
-            WHERE s.project_id = p_project_id
-              AND s.flow_signature_hash = fl.flow_signature_hash
-          )
-        END
-      )
-      ORDER BY fl.flow_length ASC
-    )
-    FROM flows fl
-  ), '[]'::jsonb)
-);
 $function$
 ;
 
@@ -5984,7 +5984,6 @@ AS $function$
       heartbeat_at = NULL,
       run_id      = gen_random_uuid()
   WHERE status = 'processing'
-    AND type = 'extraction'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
     AND attempts < max_attempts
   RETURNING *;
@@ -7327,8 +7326,9 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_pk
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_pkey PRIMARY KEY (id);
@@ -7354,7 +7354,6 @@ ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findi
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_pkey PRIMARY KEY (id);
 ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
@@ -7426,8 +7425,8 @@ ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credenti
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_target_url_key UNIQUE (project_id, target_url);
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_name_version_is_direct_sour_key UNIQUE (project_id, name, version, is_direct, source);
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgeme_project_id_finding_type_findi_key UNIQUE (project_id, finding_type, finding_key);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppres_project_id_group_type_group_k_key UNIQUE (project_id, group_type, group_key);
@@ -7736,10 +7735,12 @@ ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_proj
 ALTER TABLE public.project_dependencies ADD CONSTRAINT fk_project_dependencies_version FOREIGN KEY (dependency_version_id) REFERENCES dependency_versions(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_findings ADD CONSTRAINT project_dependency_findings_runtime_confirmed_dast_fkey FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -7800,8 +7801,6 @@ ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FO
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
-ALTER TABLE public.project_dependency_finding_events ADD CONSTRAINT project_dependency_finding_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.projects ADD CONSTRAINT projects_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -8084,12 +8083,12 @@ CREATE INDEX idx_project_dependencies_policy_result ON public.project_dependenci
 CREATE INDEX idx_project_dependencies_project_id ON public.project_dependencies USING btree (project_id);
 CREATE INDEX idx_project_dependencies_project_id_dependency_id ON public.project_dependencies USING btree (project_id, dependency_id);
 CREATE INDEX idx_project_dependency_files_project_dependency_id ON public.project_dependency_files USING btree (project_dependency_id);
-CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
-CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
 CREATE INDEX idx_project_dependency_findings_osv_id ON public.project_dependency_findings USING btree (osv_id);
 CREATE INDEX idx_project_dependency_findings_project_dependency_id ON public.project_dependency_findings USING btree (project_dependency_id);
 CREATE INDEX idx_project_dependency_findings_project_id ON public.project_dependency_findings USING btree (project_id);
 CREATE INDEX idx_project_dependency_findings_severity ON public.project_dependency_findings USING btree (severity);
+CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
+CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
 CREATE INDEX idx_project_integrations_project_id ON public.project_integrations USING btree (project_id);
 CREATE INDEX idx_project_integrations_provider ON public.project_integrations USING btree (provider);
 CREATE INDEX idx_project_integrations_status ON public.project_integrations USING btree (status);
@@ -8145,7 +8144,6 @@ CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extract
 CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
 CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
 CREATE INDEX idx_psf_task_id ON public.project_security_fixes USING btree (task_id) WHERE (task_id IS NOT NULL);
-CREATE UNIQUE INDEX uq_agent_fix_per_task_finding ON public.project_security_fixes USING btree (task_id, fix_type, COALESCE(osv_id, (semgrep_finding_id)::text, (secret_finding_id)::text, (iac_finding_id)::text, (container_finding_id)::text, (base_image_rec_id)::text, (dast_finding_id)::text, (reachable_flow_id)::text, (malicious_finding_id)::text, ''::text)) WHERE ((strategy = 'agent'::text) AND (task_id IS NOT NULL));
 CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
 CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);
@@ -8239,6 +8237,7 @@ CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_tar
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
 CREATE UNIQUE INDEX uq_aegis_agent_tasks_thread ON public.aegis_agent_tasks USING btree (thread_id) WHERE (thread_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_agent_fix_per_task_finding ON public.project_security_fixes USING btree (task_id, fix_type, COALESCE(osv_id, (semgrep_finding_id)::text, (secret_finding_id)::text, (iac_finding_id)::text, (container_finding_id)::text, (base_image_rec_id)::text, (dast_finding_id)::text, (reachable_flow_id)::text, (malicious_finding_id)::text, ''::text)) WHERE ((strategy = 'agent'::text) AND (task_id IS NOT NULL));
 CREATE UNIQUE INDEX uq_billing_transactions_org_idemp ON public.billing_transactions USING btree (organization_id, idempotency_key) WHERE (idempotency_key IS NOT NULL);
 CREATE UNIQUE INDEX uq_billing_transactions_pi_credit ON public.billing_transactions USING btree (stripe_payment_intent_id) WHERE ((stripe_payment_intent_id IS NOT NULL) AND (kind = ANY (ARRAY['topup'::text, 'auto_recharge_topup'::text])));
 

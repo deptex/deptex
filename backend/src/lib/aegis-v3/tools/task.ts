@@ -32,7 +32,7 @@ async function resolveTaskTarget(
 
   if (t.findingType === 'vulnerability') {
     const { data } = await ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, finding_key, project_dependencies!inner(name, version)')
       .eq('project_id', projectId)
       .eq('osv_id', t.findingHandle)

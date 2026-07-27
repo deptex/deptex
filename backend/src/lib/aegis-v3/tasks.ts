@@ -73,7 +73,7 @@ export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<s
   if (target.findingType === 'vulnerability') {
     // Vuln finding_key = sha256(package‖osv_id) is location-unique → safe to resolve by.
     const { data } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id')
       .eq('project_id', target.projectId)
       .eq('finding_key', target.findingKey)
@@ -216,7 +216,7 @@ export async function vulnDependencyNote(target: AegisTaskTarget): Promise<strin
     // newest row if the project has no active run recorded.
     const activeRun = await getActiveExtractionId(supabase, target.projectId);
     let query = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('project_dependency_id, fixed_versions')
       .eq('project_id', target.projectId)
       .eq('finding_key', target.findingKey);

@@ -326,7 +326,7 @@ function setActiveRun(runId: string | null) {
   });
 }
 function setVulnRow(row: any) {
-  setTableResponse('project_dependency_vulnerabilities', 'maybeSingle', { data: row, error: null });
+  setTableResponse('project_dependency_findings', 'maybeSingle', { data: row, error: null });
 }
 function setDepRow(row: any) {
   setTableResponse('project_dependencies', 'maybeSingle', { data: row, error: null });
@@ -445,11 +445,11 @@ describe('acceptTask brief enrichment', () => {
     setActiveRun('run-1');
     // Queue mode (no maybeSingle registered): the resolve read finds the vuln,
     // the note read misses — the accept must proceed with the plain brief.
-    pushTableResponse('project_dependency_vulnerabilities', {
+    pushTableResponse('project_dependency_findings', {
       data: { osv_id: 'GHSA-4jqc-8m5r-9rpr' },
       error: null,
     });
-    pushTableResponse('project_dependency_vulnerabilities', { data: null, error: null });
+    pushTableResponse('project_dependency_findings', { data: null, error: null });
     setDepRow(null);
     (insertAgentFixRow as jest.Mock).mockResolvedValue({ fixId: FIX_ID });
 

@@ -39,7 +39,7 @@ async function pickTopVuln(projectId: string): Promise<AegisTaskTarget | null> {
   // Package name/version live on project_dependencies (joined via
   // project_dependency_id), not on the vuln row.
   const { data: v, error } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('finding_key, osv_id, project_dependency_id')
     .eq('project_id', projectId)
     .eq('extraction_run_id', run)
