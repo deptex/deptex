@@ -8,6 +8,7 @@
 
 import {
   evaluateReachabilityGates,
+  evaluateSilenceScore,
   checkBaselineLock,
   checkOracle,
   buildObservedMap,
@@ -193,21 +194,35 @@ describe('checkBaselineLock', () => {
 
   it('passes when every frozen label still matches the live corpus', () => {
     const corpus = new Map([
-      ['CVE-A', 'unreachable'],
-      ['CVE-B', 'function'],
-      ['CVE-C', 'module'],
-      ['CVE-NEW', 'unreachable'], // a Layer-3 addition — not locked, allowed
+      ['CVE-A', ['unreachable']],
+      ['CVE-B', ['function']],
+      ['CVE-C', ['module']],
+      ['CVE-NEW', ['unreachable']], // a Layer-3 addition — not locked, allowed
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(true);
     expect(r.violations).toEqual([]);
   });
 
-  it('fails when a frozen label was relabelled in the corpus', () => {
+  it('passes when a SECOND app adds its own app-specific label for a frozen CVE (shared CVE id)', () => {
+    // The same Spring/Rack/Go CVE is `function` in one app and `module`/
+    // `unreachable` in another; adding the second app must NOT trip the lock so
+    // long as the frozen app still carries the frozen label.
     const corpus = new Map([
-      ['CVE-A', 'module'], // was 'unreachable' — softened to flatter the metric
-      ['CVE-B', 'function'],
-      ['CVE-C', 'module'],
+      ['CVE-A', ['unreachable', 'module']], // 2nd app labels it module — fine
+      ['CVE-B', ['module', 'function']], // frozen 'function' still present
+      ['CVE-C', ['module']],
+    ]);
+    const r = checkBaselineLock(corpus, locked);
+    expect(r.ok).toBe(true);
+    expect(r.violations).toEqual([]);
+  });
+
+  it('fails when a frozen label was relabelled and survives in NO app', () => {
+    const corpus = new Map([
+      ['CVE-A', ['module']], // was 'unreachable' — softened to flatter, gone everywhere
+      ['CVE-B', ['function']],
+      ['CVE-C', ['module']],
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(false);
@@ -217,8 +232,8 @@ describe('checkBaselineLock', () => {
 
   it('fails when a frozen CVE was removed from the corpus', () => {
     const corpus = new Map([
-      ['CVE-A', 'unreachable'],
-      ['CVE-C', 'module'],
+      ['CVE-A', ['unreachable']],
+      ['CVE-C', ['module']],
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(false);
@@ -283,5 +298,51 @@ describe('checkOracle', () => {
     expect(m.get('CVE-1')).toBe('unreachable');
     expect(m.has('CVE-2')).toBe(false); // unobserved — no reachability
     expect(m.has('CVE-3')).toBe(false); // non-ok repo excluded
+  });
+});
+
+describe('evaluateSilenceScore — app-shaped segmentation', () => {
+  // A library repo's reachable-labelled dep that floors at `module` is a
+  // correct-conservative silence (no app entry point), NOT a product FN. The
+  // app-shaped metrics exclude `library` repos so the north star reflects the
+  // "user scans their app" question.
+  const report: CorpusReport = {
+    results: [
+      {
+        name: 'express', ecosystem: 'npm', status: 'ok',
+        ground_truth_matched: [
+          // reachable-labelled but silenced → counts to overall FN, NOT app FN.
+          { cve: 'CVE-lib-1', observed: true, observed_reachability: 'module', expected_reachability: 'function' },
+          { cve: 'CVE-lib-2', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+        ],
+      },
+      {
+        name: 'spring-petclinic', ecosystem: 'maven', status: 'ok',
+        ground_truth_matched: [
+          { cve: 'CVE-app-1', observed: true, observed_reachability: 'data_flow', expected_reachability: 'function' }, // shown
+          { cve: 'CVE-app-2', observed: true, observed_reachability: 'module', expected_reachability: 'function' }, // FN
+          { cve: 'CVE-app-3', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' }, // correct silence
+        ],
+      },
+    ],
+  };
+
+  it('overall FN includes the library repo; app-shaped FN excludes it', () => {
+    const s = evaluateSilenceScore(report, new Set(['express']));
+    // Overall: 2 reachable silenced (express + petclinic) of 3 reachable-labelled.
+    expect(s.reachableSilenced).toBe(2);
+    expect(s.silenceFalseNegativeRatePct).toBe(66.67);
+    // App-shaped: only petclinic — 1 reachable silenced of 2 reachable-labelled.
+    expect(s.appReachableSilenced).toBe(1);
+    expect(s.appReachableShown).toBe(1);
+    expect(s.appLabelledObserved).toBe(3);
+    expect(s.appSilenceFalseNegativeRatePct).toBe(50);
+    expect(s.appSilencePrecisionPct).toBe(50); // 1 correct silence / 2 silenced
+  });
+
+  it('with no library repos declared, app-shaped equals overall', () => {
+    const s = evaluateSilenceScore(report); // no library set → all repos are app
+    expect(s.appReachableSilenced).toBe(s.reachableSilenced);
+    expect(s.appSilenceFalseNegativeRatePct).toBe(s.silenceFalseNegativeRatePct);
   });
 });

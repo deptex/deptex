@@ -13,6 +13,9 @@ import { OverviewOrgTargetHandleFan } from './overviewOrgFlowHandles';
 export interface VulnProjectNodeData {
   projectName: string;
   projectId: string;
+  /** Org overview: true when this project's sidebar is open — render the white "selected"
+   * highlight so the graph mirrors what's on screen (like the node is being clicked). */
+  isActive?: boolean;
   /** When set, show framework icon (same as project vulnerabilities tab header); otherwise Folder. */
   framework?: string | null;
   /** Worst vulnerability severity for this project (used to color the card). */
@@ -161,7 +164,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, bandCounts, riskGrade, projectsCount, membersCount, dependenciesCount, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, isActive, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, bandCounts, riskGrade, projectsCount, membersCount, dependenciesCount, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -274,7 +277,13 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
         <>
           {/* Compact icon-only node. Project name (and status) render below the
               card, outside the clipping box, n8n / Tines style. */}
-          <div className="relative h-full w-full rounded-xl border border-border bg-background-card-header cursor-pointer flex items-center justify-center hover:border-border/80 transition-colors">
+          {/* When the sidebar is open, mirror the same subtle monochrome ring the node
+              shows on mousedown (.react-flow__node:active in Main.css) — not a bright
+              white border — so "selected" reads identically to "clicked". */}
+          <div
+            className="relative h-full w-full rounded-xl border border-border bg-background-card-header cursor-pointer flex items-center justify-center transition-colors hover:border-border/80"
+            style={isActive ? { boxShadow: '0 0 0 1.5px rgba(212, 212, 212, 0.5), 0 0 0 4px rgba(212, 212, 212, 0.04)' } : undefined}
+          >
             {frameworkIdForIcon ? (
               <FrameworkIcon frameworkId={frameworkIdForIcon} size={30} className="text-white" />
             ) : (

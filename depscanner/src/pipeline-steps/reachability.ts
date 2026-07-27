@@ -30,6 +30,7 @@ import {
 } from '../depscore';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from '../epd';
 import type { PipelineContext } from '../pipeline-types';
+import type { TransitiveImportIndex } from '../transitive-imports';
 
 /** The slice of a project_dependencies row the rescore multiplier reads. */
 export interface RescorePdContext {
@@ -94,6 +95,9 @@ export async function doReachabilityAndEpd(
   scanStart: number,
   cveSinkPatterns: Map<string, string[]>,
   usedDependencies: Set<string>,
+  // Arc 2: the dep-import-graph step's transitive index (null = didn't run /
+  // failed — the classifier behaves exactly as before).
+  transitiveImports?: TransitiveImportIndex | null,
 ): Promise<void> {
   const {
     supabase,
@@ -200,6 +204,16 @@ export async function doReachabilityAndEpd(
     // currently stay at `module`. Excluded: gem (Rails autoload),
     // maven/golang/cargo/nuget (tree-sitter import resolution is partial).
     ecosystem: jobEcosystem,
+    // Always-on framework-runtime promotion gate: the count of HTTP-route
+    // entry points framework detection found this run (set by
+    // usage_extraction; NOT re-detected). `> 0` marks a deployed web app, the
+    // precondition for promoting a `module` finding whose CVE lives in
+    // always-on framework code (servlet-container request parser, MVC resource
+    // handler) to a visible tier.
+    httpEntryPointCount: ctx.httpEntryPointCount,
+    // Arc 2: transitive import index from the dep-import-graph step — merged
+    // into the matching ecosystem's signals inside updateReachabilityLevels.
+    transitiveImports: transitiveImports ?? undefined,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
@@ -208,7 +222,7 @@ export async function doReachabilityAndEpd(
   // --- Sub-step: Recalculate depscores with updated reachability ---
   try {
     const { data: pdvsForRescore } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id, project_dependency_id, osv_id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
       .eq('project_id', projectId)
       .eq('extraction_run_id', runId);
@@ -253,7 +267,7 @@ export async function doReachabilityAndEpd(
       for (let i = 0; i < rescoreRows.length; i += 100) {
         const chunk = rescoreRows.slice(i, i + 100);
         const { error: rescoreErr } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .upsert(chunk, { onConflict: 'id' });
         if (rescoreErr) {
           await log.warn('reachability', `depscore rescore upsert failed (${chunk.length} rows, chunk ${i}): ${rescoreErr.message}`);

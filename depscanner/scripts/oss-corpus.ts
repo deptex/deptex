@@ -64,7 +64,7 @@ interface GroundTruthCve {
 interface CorpusRepo {
   name: string;
   repo_url: string;
-  ecosystem: 'npm' | 'pypi' | 'maven' | 'golang' | 'cargo' | 'gem' | 'composer';
+  ecosystem: 'npm' | 'pypi' | 'maven' | 'golang' | 'cargo' | 'gem' | 'composer' | 'nuget';
   framework?: string;
   ref?: string;
   ground_truth_cves: GroundTruthCve[];
@@ -143,6 +143,19 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
 function die(msg: string, code = 2): never {
   process.stderr.write(`[oss-corpus] ${msg}\n`);
   process.exit(code);
+}
+
+/**
+ * Convert a host path to the POSIX form the bash `deptex-scan` wrapper needs.
+ * On Windows the wrapper's `cd "$WORKSPACE_PATH" && pwd` + docker `-v` bind
+ * mount only resolve for a `/c/Users/...` path; a passed-through backslash path
+ * (`C:\Users\...`) silently mounts an EMPTY `/workspace`, so cdxgen finds no
+ * manifest and every scan returns 0 dependencies. No-op off Windows (paths are
+ * already POSIX there). Mirrors the script-path conversion in execCapture.
+ */
+function toContainerPath(p: string): string {
+  if (process.platform !== 'win32') return p;
+  return p.replace(/^([A-Za-z]):[\\/]/, (_m, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
 }
 
 // ---------------------------------------------------------------------------
@@ -235,22 +248,29 @@ function execCapture(
         // child — `docker run -i` survives parent-stdin EOF if the
         // container process is mid-syscall (which cdxgen `--profile
         // research --deep` always is, doing remote git ls-remote calls).
-        // Sweep all running deptex-cli:local containers as a hammer; this
+        // Sweep all running containers of the SCAN IMAGE as a hammer; this
         // is acceptable for the corpus harness because we never run the
-        // harness alongside a "real" scan.
+        // harness alongside a "real" scan. The filter follows
+        // DEPTEX_CLI_IMAGE — a hardcoded deptex-cli:local left selfimprove-
+        // tagged runs unswept (zombie containers kept scanning after the
+        // harness timed out).
         try {
-          require('node:child_process').execSync(
-            'docker ps -q --filter ancestor=deptex-cli:local',
-            { encoding: 'utf8' },
-          )
+          // execFileSync (argv, no shell): DEPTEX_CLI_IMAGE flows straight into
+          // an argument, never a shell string — JSON.stringify is NOT shell
+          // escaping (it leaves `$(...)`/backticks intact, which sh would
+          // command-substitute inside double quotes). A config/CI-sourced image
+          // name must not be an injection primitive.
+          const { execFileSync } = require('node:child_process');
+          const sweepImage = process.env.DEPTEX_CLI_IMAGE || 'deptex-cli:local';
+          execFileSync('docker', ['ps', '-q', '--filter', `ancestor=${sweepImage}`], {
+            encoding: 'utf8',
+          })
             .split('\n')
             .map((s: string) => s.trim())
             .filter(Boolean)
             .forEach((id: string) => {
               try {
-                require('node:child_process').execSync(`docker kill ${id}`, {
-                  stdio: 'ignore',
-                });
+                execFileSync('docker', ['kill', id], { stdio: 'ignore' });
               } catch {
                 /* container already gone */
               }
@@ -358,8 +378,10 @@ async function runDepscanner(
   const scanBin = path.resolve(repoRoot, 'bin/deptex-scan');
   const args = [
     'run',
-    workspaceDir,
-    `--output=${outputDir}`,
+    // POSIX-normalize the workspace + output paths for the bash wrapper —
+    // a Windows backslash path mounts an empty /workspace and yields 0 deps.
+    toContainerPath(workspaceDir),
+    `--output=${toContainerPath(outputDir)}`,
     `--ecosystem=${repo.ecosystem}`,
     `--label=${repo.name}`,
     '--quiet',

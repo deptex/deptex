@@ -37,18 +37,18 @@ export async function buildProjectVulnerabilitiesUnchecked(
   // 404 on expand). Mirrors the endpoint's early `res.json([])`.
   if (!activeExtractionId) return [];
 
-  // Prefer project_dependency_vulnerabilities (reachable vulns from extraction
+  // Prefer project_dependency_findings (reachable vulns from extraction
   // worker) when this run has any. A single-row existence probe answers the
   // branch question in one indexed lookup (vs a count over thousands of CVEs).
   const { data: pdvProbe } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('id')
     .eq('project_id', projectId)
     .eq('extraction_run_id', activeExtractionId ?? NO_ACTIVE_RUN)
     .limit(1);
 
   const usePdv = (pdvProbe?.length ?? 0) > 0;
-  const rpcName = usePdv ? 'get_project_vulnerabilities_from_pdv' : 'get_project_vulnerabilities';
+  const rpcName = usePdv ? 'get_project_dependency_findings_from_pdv' : 'get_project_dependency_findings';
   const { data: rows, error: rpcError } = await supabase.rpc(rpcName, {
     p_project_id: projectId,
   });

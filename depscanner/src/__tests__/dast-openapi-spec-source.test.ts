@@ -118,12 +118,14 @@ describe('resolveSpecForJob', () => {
       expect(out.endpointCount).toBe(0);
     });
 
-    it('soft-fails when every entry is filtered out (e.g. all OFFLINE_WORKER)', async () => {
+    it('soft-fails when every entry is filtered out (e.g. all non-HTTP handlers)', async () => {
       const out = await resolveSpecForJob({
         source: 'synthesized',
         api_spec_url: null,
         targetUrl: 'https://api.example.com',
-        entryPoints: [ep({ classification: 'OFFLINE_WORKER' })],
+        // non-http_route handlers are dropped (an http_route OFFLINE_WORKER, i.e. a
+        // webhook, would now be SCANNED, so it can't stand in for "filtered out").
+        entryPoints: [ep({ entry_point_type: 'message_handler' })],
         tmpDir,
       });
       expect(out.specPath).toBeUndefined();

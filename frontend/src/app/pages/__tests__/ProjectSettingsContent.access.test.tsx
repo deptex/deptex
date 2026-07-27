@@ -57,7 +57,11 @@ vi.mock('../../hooks/use-toast', () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
-describe('ProjectSettingsPage – Access', () => {
+// The Access tab is parked (removed from the settings nav — see VALID_PROJECT_SETTINGS_SECTIONS
+// in ProjectSettingsContent). With 'access' no longer a reachable section it falls back to
+// General, so these tests can't render the Access UI. Skipped rather than deleted so they come
+// back with the tab. Un-skip when Access is restored.
+describe.skip('ProjectSettingsPage – Access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetProjectRepositories.mockResolvedValue({ repositories: [], connectedRepository: null });

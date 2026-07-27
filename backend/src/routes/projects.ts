@@ -105,7 +105,7 @@ async function fetchPdvScoresByOsvForDependency(
   >
 > {
   const { data, error } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('osv_id, depscore, contextual_depscore, entry_point_classification, epd_status, epss_score, cvss_score, cisa_kev, is_reachable')
     .eq('project_id', projectId)
     .eq('project_dependency_id', projectDependencyId)
@@ -4653,7 +4653,10 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(404).json({ error: 'No repository connected to this project' });
     }
 
-    const VALID_SYNC_FREQUENCIES = ['daily', 'weekly'] as const;
+    // 'manual' = scanning disabled: the scheduled-extraction cron only matches
+    // 'daily'/'weekly', and on-commit extraction is gated on scan_on_commit — so a
+    // 'manual' repo (with scan_on_commit off) runs no automated scans.
+    const VALID_SYNC_FREQUENCIES = ['daily', 'weekly', 'manual'] as const;
     if (sync_frequency !== undefined && !VALID_SYNC_FREQUENCIES.includes(sync_frequency)) {
       return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
     }
@@ -4709,10 +4712,12 @@ async function fetchEnrichedDependenciesForProject(
 ): Promise<any[]> {
   const debugTiming = options?.debugTiming === true;
   const t0 = debugTiming ? Date.now() : 0;
-  const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-  // Get project dependencies with joined dependency analysis data
-    // Note: license column was removed from project_dependencies - it now comes from dependencies table
-    const { data: projectDeps, error: depsError } = await supabase
+  // The active-run lookup and the project_dependencies read are independent — run them
+  // together instead of one sequential round trip after the other.
+  // Note: license column was removed from project_dependencies - it now comes from dependencies table
+  const [activeExtractionId, projectDepsResp] = await Promise.all([
+    getActiveExtractionId(supabase, projectId),
+    supabase
       .from('project_dependencies')
       .select(`
         id,
@@ -4730,7 +4735,9 @@ async function fetchEnrichedDependenciesForProject(
       `)
       .eq('project_id', projectId)
       .is('removed_at', null)
-      .order('name', { ascending: true });
+      .order('name', { ascending: true }),
+  ]);
+  const { data: projectDeps, error: depsError } = projectDepsResp;
 
     if (depsError) {
       throw depsError;
@@ -4759,6 +4766,7 @@ async function fetchEnrichedDependenciesForProject(
       filePathRowsResult,
       depsByNameResult,
       projectTeamsResult,
+      pdvRowsResult,
     ] = await Promise.all([
       dependencyIds.length > 0
         ? Promise.all(
@@ -4797,6 +4805,9 @@ async function fetchEnrichedDependenciesForProject(
         ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
+      // Max-depscore source (project_dependency_findings) — independent of the other
+      // Wave-1 reads, so fetch it here instead of in its own sequential round trip below.
+      supabase.from('project_dependency_findings').select('project_dependency_id, depscore').eq('project_id', projectId).eq('suppressed', false).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
     ]);
     const t1 = debugTiming ? Date.now() : 0;
     if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
@@ -4824,22 +4835,17 @@ async function fetchEnrichedDependenciesForProject(
       }
     }
 
+    // vulnCountsByKey is fetched in Wave 2 below, in parallel with the score/deprecation/ban
+    // reads — it depends only on `allPairs` (a Wave 1 product), not on anything Wave 2
+    // produces, so it doesn't need its own sequential round trip here.
     let vulnCountsByKey = new Map<string, VulnCounts>();
-    if (allPairs.length > 0) {
-      vulnCountsByKey = await getVulnCountsBatch(supabase, allPairs);
-    }
     const t2 = debugTiming ? Date.now() : 0;
-    if (debugTiming) console.log('[fetchEnrichedDependencies] getVulnCountsBatch', t2 - t1, 'ms (pairs:', allPairs.length, ')');
 
-    // Max depscore per project_dependency_id — from project_dependency_vulnerabilities (project-specific, includes reachability/tier)
+    // Max depscore per project_dependency_id — from project_dependency_findings (project-specific, includes reachability/tier)
     const maxDepscoreByPdId = new Map<string, number>();
     {
-      const { data: pdvRows } = await supabase
-        .from('project_dependency_vulnerabilities')
-        .select('project_dependency_id, depscore')
-        .eq('project_id', projectId)
-        .eq('suppressed', false)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
+      // Prefetched in Wave 1 above (no extra round trip here).
+      const pdvRows = (pdvRowsResult as { data: any[] | null })?.data ?? null;
       if (pdvRows) {
         for (const row of pdvRows as Array<{ project_dependency_id: string; depscore: number | null }>) {
           if (row.depscore == null) continue;
@@ -4909,8 +4915,9 @@ async function fetchEnrichedDependenciesForProject(
       ? [...new Set([...namesMissingScore, ...namesMissingScore.filter((n: string) => n.startsWith('@')).map((n: string) => n.replace(/^@/, ''))])]
       : [];
 
-    // Wave 2: score fallback, versionDependencyIds deps, deprecations, banned
+    // Wave 2: vuln counts, score fallback, versionDependencyIds deps, deprecations, banned
     const [
+      vulnCountsResult,
       scoreFallbackBatches,
       versionDepsBatches,
       orgDepRowsResult,
@@ -4918,6 +4925,7 @@ async function fetchEnrichedDependenciesForProject(
       orgBansResult,
       teamBansResult,
     ] = await Promise.all([
+      allPairs.length > 0 ? getVulnCountsBatch(supabase, allPairs) : Promise.resolve(new Map<string, VulnCounts>()),
       allNamesForScore.length > 0
         ? Promise.all(
             Array.from({ length: Math.ceil(allNamesForScore.length / NAME_BATCH_SIZE) }, (_, i) => {
@@ -4944,8 +4952,9 @@ async function fetchEnrichedDependenciesForProject(
       depIds.length > 0 ? supabase.from('banned_versions').select('dependency_id, banned_version').eq('organization_id', organizationId).in('dependency_id', depIds) : Promise.resolve({ data: null }),
       depIds.length > 0 && teamIds.length > 0 ? supabase.from('team_banned_versions').select('dependency_id, banned_version').in('team_id', teamIds).in('dependency_id', depIds) : Promise.resolve({ data: null }),
     ]);
+    vulnCountsByKey = vulnCountsResult;
     const t3 = debugTiming ? Date.now() : 0;
-    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2', t3 - t2, 'ms');
+    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2 (+vuln counts)', t3 - t2, 'ms');
 
     const scoreFallbackByName = new Map<string, { openssf_score: number | null; openssf_data: any; weekly_downloads: number | null; last_published_at: string | null; openssf_penalty?: number; popularity_penalty?: number; maintenance_penalty?: number; releases_last_12_months?: number | null; status?: string; score?: number | null; analyzed_at?: string | null }>();
     for (const resp of scoreFallbackBatches as Array<{ data: any[] | null }>) {
@@ -5138,6 +5147,15 @@ router.get('/:id/projects/:projectId/dependencies', async (req: AuthRequest, res
     const bypassCache = req.query.refresh === 'true' || req.query.bypass_cache === 'true';
     if (bypassCache) {
       await invalidateDependenciesCache(id, projectId);
+    } else {
+      // Read-through: the deps cache is invalidated on every data-change path (scan
+      // finalize in workers.ts, push webhooks, policy/deprecation changes), so a present
+      // entry is already current. Serve it instead of re-running the full multi-wave
+      // enrichment on every tab open — the endpoint previously recomputed unconditionally
+      // and only WROTE the cache, so a warm tab still paid full price. 12h TTL is the
+      // backstop; ?refresh=true (the manual Refresh) still forces a rebuild.
+      const cachedDeps = await getCached<any[]>(depsCacheKey);
+      if (cachedDeps) return res.json(cachedDeps);
     }
 
     const debugTiming = req.query.debug_timing === '1';
@@ -6168,7 +6186,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const childVersionIds = (childEdges || []).map((e: any) => e.child_version_id);
 
     const BATCH_SIZE = 100;
-    /** Reachability-assessed vulnerability from project_dependency_vulnerabilities (the scan), not the raw advisory registry. */
+    /** Reachability-assessed vulnerability from project_dependency_findings (the scan), not the raw advisory registry. */
     type PdvVuln = {
       osv_id: string;
       severity: string;
@@ -6220,7 +6238,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     };
 
     /**
-     * Overlay the project's actual scan findings (project_dependency_vulnerabilities) onto the
+     * Overlay the project's actual scan findings (project_dependency_findings) onto the
      * supply-chain view. Mirrors the findings route: when the active extraction run has PDV rows,
      * PDV is the source of truth (reachability-assessed, depscore-scored, suppressed excluded);
      * the raw advisory-by-version match stays as the fallback for versions this project hasn't
@@ -6231,7 +6249,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       const activeRunId = await getActiveExtractionId(supabase, projectId);
       if (!activeRunId) return empty;
       const { count: pdvCount } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('*', { count: 'exact', head: true })
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId);
@@ -6259,7 +6277,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       for (let i = 0; i < pdIds.length; i += BATCH_SIZE) {
         const batch = pdIds.slice(i, i + BATCH_SIZE);
         const { data: pdvRows } = await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .select('project_dependency_id, osv_id, severity, summary, aliases, depscore, reachability_level, is_reachable, cvss_score, epss_score, cisa_kev')
           .eq('project_id', projectId)
           .eq('extraction_run_id', activeRunId)
@@ -7123,7 +7141,7 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     }
 
     // No finalized extraction run (scan never completed, or crashed mid-run).
-    // Returning the legacy run-unscoped `get_project_vulnerabilities` RPC inside
+    // Returning the legacy run-unscoped `get_project_dependency_findings` RPC inside
     // the builder would surface ORPHANED vulns from a partial run — rows with no
     // depscore / reachability that 404 on expand ("not in project"). There is
     // nothing valid to show until a run finalizes; the UI renders an
@@ -9757,17 +9775,31 @@ router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) =>
     const out: Record<string, any> = { ...defaults };
     const sliceMs: Record<string, number> = {};
 
-    const settled = await Promise.allSettled(
-      tasks.map(async ([slice, run]) => {
-        if (!run) return undefined;
-        const started = Date.now();
-        try {
-          return await run();
-        } finally {
-          sliceMs[slice] = Date.now() - started;
-        }
-      }),
-    );
+    const [settled, maliciousScanStatus] = await Promise.all([
+      Promise.allSettled(
+        tasks.map(async ([slice, run]) => {
+          if (!run) return undefined;
+          const started = Date.now();
+          try {
+            return await run();
+          } finally {
+            sliceMs[slice] = Date.now() - started;
+          }
+        }),
+      ),
+      // The malicious-scan coverage flag that drives the partial-coverage banner.
+      // This is the ONLY field the project sidebar used getProjectStats for, so
+      // folding it into the bundle lets the sidebar drop that ~10-query stats call
+      // on open entirely. Latest scan_job wins (matches the old /stats query).
+      supabase
+        .from('scan_jobs')
+        .select('malicious_scan_status')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then((r) => (r.data as { malicious_scan_status?: string | null } | null)?.malicious_scan_status ?? null),
+    ]);
 
     settled.forEach((result, i) => {
       const [slice, run] = tasks[i];
@@ -9805,6 +9837,7 @@ router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) =>
       trackerLinks: out.trackerLinks,
       groupSuppressions: out.groupSuppressions,
       acknowledgements: out.acknowledgements,
+      maliciousScanStatus,
       degradedSlices,
     });
   } catch (error: any) {
@@ -9829,7 +9862,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
     // max(access, rpc) instead of a ~10-query waterfall.
     const [accessCheck, bundleRes] = await Promise.all([
       checkProjectAccess(userId, id, projectId),
-      supabase.rpc('get_vulnerability_detail_bundle', {
+      supabase.rpc('get_dependency_finding_detail_bundle', {
         p_project_id: projectId,
         p_osv_id: osvId,
       }),
@@ -9888,7 +9921,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         suppressed: true,
         suppressed_by: userId,
@@ -9902,7 +9935,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'suppressed',
@@ -9935,7 +9968,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({ suppressed: false, suppressed_by: null, suppressed_at: null })
       .eq('project_id', projectId)
       .eq('osv_id', osvId)
@@ -9943,7 +9976,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'unsuppressed',
@@ -10095,7 +10128,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
 
     const exemptReason = reason?.trim() ? `Risk accepted: ${reason.trim()}` : 'Risk accepted';
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         risk_accepted: true,
         risk_accepted_by: userId,
@@ -10110,7 +10143,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'accepted',
@@ -10143,7 +10176,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const { error } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .update({
         risk_accepted: false,
         risk_accepted_by: null,
@@ -10156,7 +10189,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
 
     if (error) throw error;
 
-    await supabase.from('project_vulnerability_events').insert({
+    await supabase.from('project_dependency_finding_events').insert({
       project_id: projectId,
       osv_id: osvId,
       event_type: 'risk_unaccepted',
@@ -10202,7 +10235,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const { data: vulns } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, severity, depscore, is_reachable, epss_score, cisa_kev, fixed_versions, suppressed, risk_accepted')
       .eq('project_id', projectId)
       .eq('project_dependency_id', depId)
@@ -10375,7 +10408,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     // Return open + ignored rows (the table filters Open/Ignored/All client-side
     // via the stored status); resolved rows stay hidden.
     let countQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
@@ -10389,7 +10422,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     const to = from + perPage - 1;
 
     let dataQuery = supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select(
         'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
       )
@@ -10920,7 +10953,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
       // SQL-aggregate vuln + dep counts (phase64b). Replaces the old client-side counting of the
-      // full project_dependency_vulnerabilities + project_dependencies row sets, which silently
+      // full project_dependency_findings + project_dependencies row sets, which silently
       // truncated at PostgREST's 1000-row cap for any project with >1000 vulns or deps.
       supabase.rpc('project_stats_counts', { p_project_id: projectId, p_active_run_id: activeRunId }).then(r => r.data?.[0] ?? null),
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
@@ -11011,7 +11044,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const vulnByPd = new Map<string, string>();
     if (directDepRowIds.length > 0) {
       const { data: directVulns } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('project_dependency_id, severity')
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId)
@@ -11119,7 +11152,7 @@ router.get('/:id/projects/:projectId/vulnerability-timeline', async (req: AuthRe
     const sinceIso = since.toISOString();
 
     const { data: events } = await supabase
-      .from('project_vulnerability_events')
+      .from('project_dependency_finding_events')
       .select('event_type, created_at')
       .eq('project_id', projectId)
       .gte('created_at', sinceIso)
@@ -11172,7 +11205,7 @@ router.get('/:id/projects/:projectId/recent-activity', async (req: AuthRequest, 
         .order('created_at', { ascending: false })
         .limit(20),
       supabase
-        .from('project_vulnerability_events')
+        .from('project_dependency_finding_events')
         .select('id, event_type, osv_id, metadata, created_at')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false })

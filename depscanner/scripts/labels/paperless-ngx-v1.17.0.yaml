@@ -1,0 +1,338 @@
+# paperless-ngx v1.17.0 (paperless-ngx/paperless-ngx) — Django/pypi, FIRST labelled pypi app.
+# Document-management server (DRF + Angular SPA, gunicorn+uvicorn, Pipfile). Source-grounded
+# blind triage + adversarial verifier (2026-07-03). Verifier REFUTED the cryptography cluster
+# (12 CVEs unreachable->module: cryptography is in Pipfile.lock default = prod-installed, the
+# bundled-OpenSSL wheel ships the vuln — first-party grep=NONE was the wrong test). All other
+# load-bearing labels upheld (tornado-via-off-by-default-flower=module; urllib3/requests/twisted/
+# jinja2 develop-only=unreachable; gunicorn parser bypassed by UvicornWorker=unreachable).
+cves:
+  - id: CVE-2024-39689
+    dep: certifi
+    expected_reachability: module
+  - id: CVE-2024-4340
+    dep: sqlparse
+    expected_reachability: unreachable
+  - id: CVE-2025-6176
+    dep: brotli
+    expected_reachability: unreachable
+  - id: CVE-2025-66471
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2024-37891
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2026-21441
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2026-32274
+    dep: black
+    expected_reachability: unreachable
+  - id: CVE-2023-50447
+    dep: pillow
+    expected_reachability: unreachable
+  - id: CVE-2023-50782
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2026-49853
+    dep: tornado
+    expected_reachability: unreachable
+  - id: CVE-2024-28219
+    dep: pillow
+    expected_reachability: unreachable
+  - id: CVE-2026-33236
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2026-4539
+    dep: pygments
+    expected_reachability: unreachable
+  - id: CVE-2026-22702
+    dep: virtualenv
+    expected_reachability: unreachable
+  - id: CVE-2026-27459
+    dep: pyopenssl
+    expected_reachability: unreachable
+  - id: CVE-2025-47273
+    dep: setuptools
+    expected_reachability: unreachable
+  - id: CVE-2025-69534
+    dep: markdown
+    expected_reachability: unreachable
+  - id: CVE-2026-46338
+    dep: pymdown-extensions
+    expected_reachability: unreachable
+  - id: CVE-2026-45409
+    dep: idna
+    expected_reachability: module
+  - id: CVE-2026-0847
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2024-26130
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2025-57833
+    dep: django
+    expected_reachability: module
+  - id: CVE-2025-71176
+    dep: pytest
+    expected_reachability: unreachable
+  - id: CVE-2025-47287
+    dep: tornado
+    expected_reachability: module
+  - id: CVE-2023-41164
+    dep: django
+    expected_reachability: data_flow
+  - id: CVE-2025-14009
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2025-48432
+    dep: django
+    expected_reachability: data_flow
+  - id: CVE-2023-44271
+    dep: pillow
+    expected_reachability: function
+  - id: CVE-2024-52804
+    dep: tornado
+    expected_reachability: module
+  - id: CVE-2024-47081
+    dep: requests
+    expected_reachability: unreachable
+  - id: CVE-2023-33733
+    dep: reportlab
+    expected_reachability: module
+  - id: CVE-2024-0727
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2024-35195
+    dep: requests
+    expected_reachability: unreachable
+  - id: CVE-2024-41671
+    dep: twisted
+    expected_reachability: unreachable
+  - id: CVE-2024-41810
+    dep: twisted
+    expected_reachability: unreachable
+  - id: CVE-2023-38325
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2024-39705
+    dep: nltk
+    expected_reachability: module
+  - id: CVE-2025-27516
+    dep: jinja2
+    expected_reachability: unreachable
+  - id: CVE-2026-49854
+    dep: tornado
+    expected_reachability: module
+  - id: CVE-2024-6345
+    dep: setuptools
+    expected_reachability: unreachable
+  - id: CVE-2025-70559
+    dep: pdfminer.six
+    expected_reachability: module
+  - id: CVE-2024-21503
+    dep: black
+    expected_reachability: unreachable
+  - id: CVE-2026-35536
+    dep: tornado
+    expected_reachability: module
+  - id: CVE-2025-64459
+    dep: django
+    expected_reachability: module
+  - id: CVE-2023-45803
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2024-34062
+    dep: tqdm
+    expected_reachability: unreachable
+  - id: CVE-2026-25645
+    dep: requests
+    expected_reachability: unreachable
+  - id: CVE-2026-33230
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2025-66418
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2024-56201
+    dep: jinja2
+    expected_reachability: unreachable
+  - id: CVE-2026-42304
+    dep: twisted
+    expected_reachability: unreachable
+  - id: CVE-2024-21520
+    dep: djangorestframework
+    expected_reachability: module
+  - id: CVE-2024-22195
+    dep: jinja2
+    expected_reachability: unreachable
+  - id: CVE-2024-34064
+    dep: jinja2
+    expected_reachability: unreachable
+  - id: CVE-2023-43665
+    dep: django
+    expected_reachability: module
+  - id: CVE-2026-0846
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2024-6827
+    dep: gunicorn
+    expected_reachability: unreachable
+  - id: CVE-2023-4863
+    dep: pillow
+    expected_reachability: function
+  - id: CVE-2023-49083
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2024-5569
+    dep: zipp
+    expected_reachability: unreachable
+  - id: CVE-2024-3651
+    dep: idna
+    expected_reachability: module
+  - id: CVE-2026-33231
+    dep: nltk
+    expected_reachability: unreachable
+  - id: CVE-2026-30922
+    dep: pyasn1
+    expected_reachability: unreachable
+  - id: CVE-2024-5206
+    dep: scikit-learn
+    expected_reachability: module
+  - id: CVE-2026-34073
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2026-28684
+    dep: python-dotenv
+    expected_reachability: unreachable
+  - id: CVE-2026-49855
+    dep: tornado
+    expected_reachability: unreachable
+  - id: CVE-2026-54293
+    dep: nltk
+    expected_reachability: module
+  - id: CVE-2025-50181
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2024-56326
+    dep: jinja2
+    expected_reachability: unreachable
+  - id: CVE-2026-44431
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2026-31958
+    dep: tornado
+    expected_reachability: module
+  - id: CVE-2023-46695
+    dep: django
+    expected_reachability: unreachable
+  - id: CVE-2026-22701
+    dep: filelock
+    expected_reachability: unreachable
+  - id: CVE-2025-64458
+    dep: django
+    expected_reachability: unreachable
+  - id: CVE-2025-68142
+    dep: pymdown-extensions
+    expected_reachability: unreachable
+  - id: CVE-2026-26007
+    dep: cryptography
+    expected_reachability: module
+  - id: CVE-2026-42310
+    dep: pillow
+    expected_reachability: unreachable
+  - id: CVE-2024-53899
+    dep: virtualenv
+    expected_reachability: unreachable
+  - id: CVE-2024-45231
+    dep: django
+    expected_reachability: module
+  - id: CVE-2023-43804
+    dep: urllib3
+    expected_reachability: unreachable
+  - id: CVE-2026-41066
+    dep: lxml
+    expected_reachability: module
+  - id: CVE-2026-27448
+    dep: pyopenssl
+    expected_reachability: unreachable
+  - id: CVE-2025-43859
+    dep: h11
+    expected_reachability: module
+  - id: CVE-2024-1135
+    dep: gunicorn
+    expected_reachability: unreachable
+  - id: CVE-2025-68146
+    dep: filelock
+    expected_reachability: module
+  - id: CVE-2025-64512
+    dep: pdfminer.six
+    expected_reachability: module
+  - id: CVE-2026-42308
+    dep: pillow
+    expected_reachability: module
+  - id: CVE-2023-46137
+    dep: twisted
+    expected_reachability: unreachable
+  - id: CVE-2023-25399
+    dep: scipy
+    expected_reachability: module
+  - id: CVE-2026-44545
+    dep: daphne
+    expected_reachability: unreachable
+  - id: CVE-2026-44546
+    dep: daphne
+    expected_reachability: unreachable
+  - id: CVE-2026-12243
+    dep: nltk
+    expected_reachability: module
+  - id: CVE-2026-0848
+    dep: nltk
+    expected_reachability: unreachable
+  - id: GHSA-27jp-wm6q-gp25
+    dep: sqlparse
+    expected_reachability: unreachable
+  - id: GHSA-8rfp-98v4-mmr6
+    dep: bleach
+    expected_reachability: function
+  - id: GHSA-qppv-j76h-2rpx
+    dep: tornado
+    expected_reachability: module
+  - id: GHSA-rf74-v2fm-23pw
+    dep: nltk
+    expected_reachability: module
+  - id: GHSA-h4gh-qq45-vh27
+    dep: cryptography
+    expected_reachability: module
+  - id: GHSA-753j-mpmx-qq6g
+    dep: tornado
+    expected_reachability: module
+  - id: GHSA-78cv-mqj4-43f7
+    dep: tornado
+    expected_reachability: module
+  - id: GHSA-pw6j-qg29-8w7f
+    dep: tornado
+    expected_reachability: unreachable
+  - id: GHSA-gj48-438w-jh9v
+    dep: bleach
+    expected_reachability: function
+  - id: GHSA-w235-7p84-xx57
+    dep: tornado
+    expected_reachability: unreachable
+  - id: GHSA-537c-gmf6-5ccf
+    dep: cryptography
+    expected_reachability: module
+  - id: GHSA-6v7p-g79w-8964
+    dep: msgpack
+    expected_reachability: module
+  - id: GHSA-v8gr-m533-ghj9
+    dep: cryptography
+    expected_reachability: module
+  - id: GHSA-jm77-qphf-c4w8
+    dep: cryptography
+    expected_reachability: module
+  - id: GHSA-5cpq-8wj7-hf2v
+    dep: cryptography
+    expected_reachability: module
+  - id: PYSEC-2023-175
+    dep: pillow
+    expected_reachability: function

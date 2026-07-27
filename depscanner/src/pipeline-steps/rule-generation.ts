@@ -45,7 +45,7 @@ export async function doRuleGeneration(ctx: PipelineContext): Promise<void> {
     },
     fn: async () => {
       const candidatesQuery = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('osv_id, severity, cisa_kev, reachability_level, aliases, project_dependency_id')
         .eq('project_id', projectId)
         .eq('extraction_run_id', runId);

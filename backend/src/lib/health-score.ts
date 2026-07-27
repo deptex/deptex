@@ -59,7 +59,7 @@ async function getComplianceScore(projectId: string): Promise<number> {
 
 async function getVulnScore(projectId: string, activeRunId: string): Promise<number> {
   const { data: vulns } = await supabase
-    .from('project_dependency_vulnerabilities')
+    .from('project_dependency_findings')
     .select('severity')
     .eq('project_id', projectId)
     .eq('extraction_run_id', activeRunId)

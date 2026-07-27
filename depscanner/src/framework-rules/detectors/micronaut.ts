@@ -2,13 +2,15 @@ import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   MICRONAUT_VERB_ANNOTATIONS,
   annotationsOn,
-  classifyFromAuth,
   detectJavaAuthMechanism,
+  javaAuthEvidenceFromAnnotations,
   joinRoute,
   lineOf,
+  mergeJavaAuthEvidence,
   textOf,
   walkTree,
 } from '../util/java';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // Micronaut routes:
 //   @Controller("/api/users")
@@ -24,8 +26,9 @@ export const micronautDetector: FrameworkDetector = {
   triggerImports: ['io.micronaut.http.annotation', 'io.micronaut.core'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectJavaAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from @Secured annotation evidence
+    // (IS_AUTHENTICATED / roles → auth; IS_ANONYMOUS → explicit public).
+    const authMechanismHint = detectJavaAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -35,6 +38,7 @@ export const micronautDetector: FrameworkDetector = {
       if (!controllerAnn) return;
       const classPrefix = controllerAnn.firstStringArg ?? null;
       const className = node.childForFieldName('name');
+      const classEvidence = javaAuthEvidenceFromAnnotations(classAnns, source);
 
       const body = node.childForFieldName('body');
       if (!body) return;
@@ -42,23 +46,37 @@ export const micronautDetector: FrameworkDetector = {
         const member = body.namedChild(i)!;
         if (member.type !== 'method_declaration') continue;
         const methodAnns = annotationsOn(member, source);
+        const merged = mergeJavaAuthEvidence(
+          classEvidence,
+          javaAuthEvidenceFromAnnotations(methodAnns, source),
+        );
         for (const ann of methodAnns) {
           const verb = MICRONAUT_VERB_ANNOTATIONS[ann.name];
           if (!verb) continue;
           const subRoute = ann.firstStringArg ?? '';
+          const routePattern = joinRoute(classPrefix, subRoute);
           const methodName = member.childForFieldName('name');
+          const result = classifyRoute({
+            vettedAuthTokens: merged.vettedAuthTokens,
+            publicOverrides: merged.publicOverrides,
+            routePattern,
+            centralizedOnly: false,
+          });
           entryPoints.push({
             filePath: file.filePath,
             lineNumber: lineOf(member),
             framework: 'micronaut',
             handlerName: methodName ? textOf(methodName, source) : null,
             httpMethod: verb,
-            routePattern: joinRoute(classPrefix, subRoute),
+            routePattern,
             entryPointType: 'http_route',
-            classification,
-            authenticated: !!authMechanism,
-            authMechanism,
-            middlewareChain: null,
+            classification: result.classification,
+            authenticated: result.authenticated,
+            authMechanism: authMechanismHint,
+            middlewareChain: merged.vettedAuthTokens.length ? merged.vettedAuthTokens : null,
+            // Declaration-bound family — span always demotion-eligible (Sem 6).
+            handlerSpan: spanOfNode(member),
+            demotionEligible: true,
             metadata: { controller: className ? textOf(className, source) : null, annotation: ann.name },
           });
         }

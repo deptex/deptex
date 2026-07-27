@@ -124,7 +124,7 @@ export async function recordOutcomeFromFixJob(fixJobId: string): Promise<string 
       isDirect = pd?.is_direct ?? null;
 
       const { data: pdv } = await supabase
-        .from('project_dependency_vulnerabilities')
+        .from('project_dependency_findings')
         .select('reachability_level, is_reachable')
         .eq('project_dependency_id', job.project_dependency_id)
         .eq('osv_id', job.osv_id)

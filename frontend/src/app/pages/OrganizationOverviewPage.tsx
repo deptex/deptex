@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, Copy, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -21,7 +21,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression, type FindingAcknowledgement, type OverviewBundle } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression, type FindingAcknowledgement, type OverviewBundle } from '../../lib/api';
 import { readOverviewCache, writeOverviewCache } from '../../lib/overview-cache';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
@@ -74,7 +74,7 @@ import { RoleBadge } from '../../components/RoleBadge';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { TeamPermissionEditor } from '../../components/TeamPermissionEditor';
 import type { NodeTypes } from '@xyflow/react';
-import { ProjectDependenciesContent } from './ProjectDependenciesContent';
+import { ProjectDependenciesContent, clearProjectDepsCache, warmProjectDepsCache } from './ProjectDependenciesContent';
 import { ProjectComplianceContent } from './ProjectComplianceContent';
 import { ProjectSettingsContent } from './ProjectSettingsContent';
 import {
@@ -119,6 +119,26 @@ const orgSkeletonNodes = [
 
 const UNGROUPED_TEAM_ID = 'org-ungrouped';
 const UNGROUPED_TEAM_NAME = 'No team';
+
+/**
+ * Overview-local "first extraction still in flight" check. Broader than the shared
+ * isInitialExtraction: it ALSO treats the post-worker QStash populate window as
+ * still-creating. After the worker finishes it sets status='analyzing' /
+ * extraction_step='completed' (which the shared helper deliberately treats as "done"
+ * to keep Recent Activity aligned), but findings + the project_security_summaries spine
+ * are still being written until status flips to 'ready' and last_extracted_at is stamped.
+ * Flipping the node/sidebar to "done" during that window shows 0 findings / "No findings"
+ * until the data lands. Staying in the "creating" state until last_extracted_at exists
+ * avoids the flash; the 'ready' realtime event then refetches the summary + bundle.
+ */
+function overviewInitialExtracting(
+  status: string,
+  step: string | null | undefined,
+  lastExtractedAt: string | null | undefined,
+): boolean {
+  if (isInitialExtraction(status, step, lastExtractedAt)) return true;
+  return status === 'analyzing' && !lastExtractedAt;
+}
 // Stable empty-state references so the OrgCanvasCursors memo/deps don't
 // churn every render when the cursor toggles are off.
 const EMPTY_CURSORS: [] = [];
@@ -297,8 +317,16 @@ export default function OrganizationOverviewPage() {
   const [selectedProjectFramework, setSelectedProjectFramework] = useState<string | null>(null);
   const [selectedProjectIsExtracting, setSelectedProjectIsExtracting] = useState(false);
   const [selectedProjectIsInitialExtracting, setSelectedProjectIsInitialExtracting] = useState(false);
-  const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
+  // Malicious-scan coverage flag for the partial-coverage banner — now sourced from
+  // the findings bundle (bundle.maliciousScanStatus) instead of a separate ~10-query
+  // getProjectStats call on every project-sidebar open.
+  const [maliciousScanStatus, setMaliciousScanStatus] = useState<'complete' | 'partial' | 'failed' | null>(null);
   const [projectStatsLoading, setProjectStatsLoading] = useState(false);
+  // Bumped when the open project's first scan truly finishes (status 'ready' /
+  // last_extracted_at stamped) so the findings-load effect refetches the bundle that
+  // came back empty mid-extraction. See the transition effect below.
+  const [findingsReloadNonce, setFindingsReloadNonce] = useState(0);
+  const findingsReadyTrackRef = useRef<{ projectId: string | null; wasReady: boolean }>({ projectId: null, wasReady: false });
   const [projectVulnerabilities, setProjectVulnerabilities] = useState<ProjectVulnerability[] | null>(null);
   const [projectSecrets, setProjectSecrets] = useState<SecretFinding[]>([]);
   const [projectSemgrep, setProjectSemgrep] = useState<SemgrepFinding[]>([]);
@@ -319,7 +347,11 @@ export default function OrganizationOverviewPage() {
   // the dependencies supply-chain table; consumed by VulnerabilityExpandableTable.
   const [projectFindingToOpen, setProjectFindingToOpen] = useState<string | null>(null);
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
-  const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
+  // The Settings/Dependencies tabs get their organization from the page's in-memory
+  // `organization` (outlet context) — no separate fetch — and the full project is
+  // prefetched a tick after the findings bundle settles (see the sidebar-open effect),
+  // so both tabs open without a click-time round-trip. This flag gates only the brief
+  // race where a tab is clicked before that prefetch lands.
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
   const [rawTeamsWithProjects, setRawTeamsWithProjects] = useState<OverviewTeamWithProjects[]>([]);
@@ -384,6 +416,7 @@ export default function OrganizationOverviewPage() {
   const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
   const [teamSettingsShowDeleteConfirm, setTeamSettingsShowDeleteConfirm] = useState(false);
   const [teamSettingsDeleteConfirmText, setTeamSettingsDeleteConfirmText] = useState('');
+  const [copiedTeamName, setCopiedTeamName] = useState(false);
   const [teamSettingsDeleting, setTeamSettingsDeleting] = useState(false);
   // Team sidebar roles settings state
   const [teamSettingsLoadingRoles, setTeamSettingsLoadingRoles] = useState(false);
@@ -426,7 +459,7 @@ export default function OrganizationOverviewPage() {
     || (selectedProjectRealtime.isLoading && selectedProjectIsExtracting);
   // Only block sidebar UI (show ExtractionProgressCard) for first-ever extraction
   const selectedProjectEffectiveIsInitialExtracting =
-    isInitialExtraction(selectedProjectRealtime.status, selectedProjectRealtime.extractionStep, selectedProjectRealtime.lastExtractedAt)
+    overviewInitialExtracting(selectedProjectRealtime.status, selectedProjectRealtime.extractionStep, selectedProjectRealtime.lastExtractedAt)
     || (selectedProjectRealtime.isLoading && selectedProjectIsInitialExtracting);
   // Show error card when extraction failed and there's no prior successful extraction to fall back on
   const selectedProjectExtractionFailed =
@@ -444,7 +477,7 @@ export default function OrganizationOverviewPage() {
     const extractionStep = selectedProjectRealtime.extractionStep;
     const lastExtractedAt = selectedProjectRealtime.lastExtractedAt;
     const isExtract = isExtractionOngoing(repoStatus || '', extractionStep);
-    const isInitialExtract = isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt);
+    const isInitialExtract = overviewInitialExtracting(repoStatus || '', extractionStep, lastExtractedAt);
     const isFailed = repoStatus === 'error' && !lastExtractedAt;
     setRawTeamsWithProjects((prev) =>
       prev.map((t) => ({
@@ -478,6 +511,30 @@ export default function OrganizationOverviewPage() {
     }
     prevExtractingRef.current = nowExtracting;
   }, [selectedProjectEffectiveIsExtracting, orgId, selectedProjectId]);
+
+  // When the OPEN project's first scan truly completes — status reaches 'ready' or
+  // last_extracted_at gets stamped, AFTER the QStash populate window that writes the
+  // findings — the bundle we fetched while it was still extracting came back empty.
+  // Bump a nonce on that false→true transition so the findings-load effect refetches
+  // and the table populates instead of sticking on "No findings".
+  useEffect(() => {
+    if (!selectedProjectId || selectedProjectRealtime.isLoading) return;
+    const isReady =
+      selectedProjectRealtime.status === 'ready' || !!selectedProjectRealtime.lastExtractedAt;
+    const track = findingsReadyTrackRef.current;
+    if (track.projectId !== selectedProjectId) {
+      // First observation for this project — record state, never refetch (the open
+      // effect already fetched). Only a later in-place transition triggers a reload.
+      findingsReadyTrackRef.current = { projectId: selectedProjectId, wasReady: isReady };
+      return;
+    }
+    if (isReady && !track.wasReady) {
+      findingsReadyTrackRef.current = { projectId: selectedProjectId, wasReady: true };
+      setFindingsReloadNonce((n) => n + 1);
+    } else if (!isReady && track.wasReady) {
+      findingsReadyTrackRef.current = { projectId: selectedProjectId, wasReady: false };
+    }
+  }, [selectedProjectId, selectedProjectRealtime.status, selectedProjectRealtime.lastExtractedAt, selectedProjectRealtime.isLoading]);
 
   /** Update URL search params in-place (replace, no new history entry). Pass null to delete a key. */
   const setSidebarParams = useCallback((updates: Record<string, string | null>) => {
@@ -791,7 +848,7 @@ export default function OrganizationOverviewPage() {
             const extractionStep = row.extraction_step ?? null;
             const lastExtractedAt = row.last_extracted_at ?? null;
             const isExtract = isExtractionOngoing(repoStatus || '', extractionStep);
-            const isInitialExtract = isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt);
+            const isInitialExtract = overviewInitialExtracting(repoStatus || '', extractionStep, lastExtractedAt);
             const isFailed = repoStatus === 'error' && !lastExtractedAt;
             // Directly patch the project state — no API call, instant like useRealtimeStatus
             setRawTeamsWithProjects((prev) =>
@@ -877,7 +934,7 @@ export default function OrganizationOverviewPage() {
               statusId: p.status_id ?? null,
               importance: typeof p.importance === 'number' ? p.importance : null,
               isExtracting,
-              isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
+              isInitialExtracting: overviewInitialExtracting(repoStatus || '', extractionStep, lastExtractedAt),
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof (p as Project).health_score === 'number' ? (p as Project).health_score : null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? null,
@@ -1009,7 +1066,7 @@ export default function OrganizationOverviewPage() {
               projectId: p.id, projectName: p.name, framework: p.framework ?? null,
               statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
               importance: typeof p.importance === 'number' ? p.importance : null,
-              isExtracting, isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
+              isExtracting, isInitialExtracting: overviewInitialExtracting(repoStatus || '', extractionStep, lastExtractedAt),
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof p.health_score === 'number' ? p.health_score : null,
               dependenciesCount: p.direct_dependencies_count ?? null,
@@ -1548,14 +1605,16 @@ export default function OrganizationOverviewPage() {
       setSelectedProjectId(null);
       setSelectedProjectName(null);
       setSelectedProjectFramework(null);
-      setProjectStats(null);
+      setMaliciousScanStatus(null);
       setProjectVulnerabilities(null);
       setExpandedProjectVulnRowId(null);
       setProjectVulnDetailByRowId({});
       setProjectSidebarProject(null);
-      setProjectSidebarOrganization(null);
       setProjectSettingsSubTab('general');
       setProjectFindingToOpen(null);
+      // Drop the cached dependency list so reopening the sidebar reloads it fresh, matching
+      // the Findings tab (whose state is reset just above). Tab switches while open keep it.
+      clearProjectDepsCache();
     }, 150);
   }, [setSidebarParams]);
 
@@ -1611,6 +1670,22 @@ export default function OrganizationOverviewPage() {
     });
   }, [selectedProjectId]);
 
+  /** Optimistic project delete: drop the node from the graph store in place (no refetch,
+   *  no full graph reload) and close the sidebar — the deleted project just disappears
+   *  from the graph. Mirrors the rename/transfer in-place patches above. */
+  const handleProjectDeleted = useCallback(() => {
+    const deletedId = selectedProjectId;
+    closeProjectSidebar();
+    if (!deletedId) return;
+    setRawTeamsWithProjects((prev) =>
+      prev.map((t) => {
+        if (!t.projects.some((p) => p.projectId === deletedId)) return t;
+        const projects = t.projects.filter((p) => p.projectId !== deletedId);
+        return { ...t, projects, projectCount: projects.length };
+      }),
+    );
+  }, [selectedProjectId, closeProjectSidebar]);
+
   const closeOrgSidebarImmediate = useCallback(() => {
     setOrgSidebarVisible(false);
     setOrgSidebarOpen(false);
@@ -1648,14 +1723,14 @@ export default function OrganizationOverviewPage() {
     setSelectedProjectFramework(null);
     setSelectedProjectIsExtracting(false);
     setSelectedProjectIsInitialExtracting(false);
-    setProjectStats(null);
+    setMaliciousScanStatus(null);
     setProjectVulnerabilities(null);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
     setProjectSidebarProject(null);
-    setProjectSidebarOrganization(null);
     setProjectSettingsSubTab('general');
     setProjectFindingToOpen(null);
+    clearProjectDepsCache();
   }, []);
 
   /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
@@ -1665,8 +1740,14 @@ export default function OrganizationOverviewPage() {
       setSelectedProjectId(project.id);
       setSelectedProjectName(project.name);
       setSelectedProjectFramework(project.framework ?? null);
+      // Drop BOTH sticky extraction flags from the previously-selected project — otherwise
+      // selectedProjectIsInitialExtracting leaks into the new project's realtime-loading
+      // window (the effective computation falls back to it while isLoading), flashing the
+      // "creating" card on a project that isn't extracting. The node-click path already
+      // resets both from node data; this list/link path was only clearing IsExtracting.
       setSelectedProjectIsExtracting(false);
-      setProjectStats(null);
+      setSelectedProjectIsInitialExtracting(false);
+      setMaliciousScanStatus(null);
       setProjectVulnerabilities(null);
       setProjectSidebarProject(null);
       setExpandedProjectVulnRowId(null);
@@ -1852,7 +1933,7 @@ export default function OrganizationOverviewPage() {
           setSelectedProjectFramework(d.framework ?? null);
           setSelectedProjectIsExtracting(d.isExtracting ?? false);
           setSelectedProjectIsInitialExtracting(d.isInitialExtracting ?? false);
-          setProjectStats(null);
+          setMaliciousScanStatus(null);
           setProjectVulnerabilities(null);
           setProjectSidebarProject(null);
           setExpandedProjectVulnRowId(null);
@@ -2810,13 +2891,14 @@ export default function OrganizationOverviewPage() {
     }
   }, []);
 
-  // Fetch project findings, stats, full project and org when the project sidebar opens.
-  // The Findings tab is the default landing tab, so its time-to-render is what "opening
-  // the project" feels like. We gate the table on ONLY the finding data it draws
-  // (SCA vulns + secrets + semgrep) and load everything else — stats, the full project,
-  // the org — on independent tracks so they can't hold the table behind them. Previously
-  // all six were one Promise.all, so the table waited on the slowest call (often the
-  // 10-query stats aggregate) even though it renders none of that data.
+  // Fetch the project findings bundle when the project sidebar opens. The Findings
+  // tab is the default landing tab, so this single call's time-to-render is what
+  // "opening the project" feels like. The bundle carries every scanner type PLUS the
+  // malicious-scan coverage flag for the partial-coverage banner, so opening the
+  // sidebar is now exactly ONE request — the old ~10-query getProjectStats call
+  // (used only for that banner flag) and its independent track are gone. The full
+  // project + org are still loaded lazily by the effect below, only when the
+  // Dependencies / Settings tabs are opened.
   useEffect(() => {
     if (!orgId || !selectedProjectId || !projectSidebarOpen) return;
     const pid = selectedProjectId;
@@ -2824,7 +2906,7 @@ export default function OrganizationOverviewPage() {
     // projectStatsLoading is (despite the name) the findings-table skeleton gate — it
     // stays true until the finding data below settles.
     setProjectStatsLoading(true);
-    setProjectStats(null);
+    setMaliciousScanStatus(null);
     setProjectVulnerabilities(null);
     setProjectSecrets([]);
     setProjectSemgrep([]);
@@ -2836,14 +2918,11 @@ export default function OrganizationOverviewPage() {
     setProjectCodeFlows([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
-    // Clear stale project/org; the full project + org are loaded lazily by the
-    // effect below, only when a tab that needs them (Dependencies / Settings) is
-    // opened. The default Findings tab never touches them, so keeping them off the
-    // open burst frees two of the browser's ~6 concurrent connections for the
-    // finding requests that actually gate the table.
-    setProjectSidebarProjectLoading(false);
+    // Clear the stale project; it's prefetched a tick after the findings bundle below
+    // (the Dependencies/Settings tabs need it, and it's a single cheap row read). The
+    // org comes from the page's in-memory `organization`, so there's no org fetch on open.
+    setProjectSidebarProjectLoading(true);
     setProjectSidebarProject(null);
-    setProjectSidebarOrganization(null);
 
     // THE findings tab in one request — every scanner type plus the tracker/ignore
     // row metadata, fetched server-side in parallel and co-located with the DB.
@@ -2865,6 +2944,7 @@ export default function OrganizationOverviewPage() {
         setTrackerLinks(bundle.trackerLinks ?? []);
         setGroupSuppressions(bundle.groupSuppressions ?? []);
         setAcknowledgements(bundle.acknowledgements ?? []);
+        setMaliciousScanStatus(bundle.maliciousScanStatus ?? null);
       } catch {
         if (cancelled) return;
         // Bundle failed wholesale — clear the table types (the per-clear above set
@@ -2882,41 +2962,33 @@ export default function OrganizationOverviewPage() {
       } finally {
         if (!cancelled) setProjectStatsLoading(false);
       }
-    })();
 
-    // Stats feed only the partial-coverage banner + header chips — never the table rows.
-    api.getProjectStats(orgId, pid)
-      .then((stats) => { if (!cancelled) setProjectStats(stats); })
-      .catch(() => { if (!cancelled) setProjectStats(null); });
-
-    return () => { cancelled = true; };
-  }, [orgId, selectedProjectId, projectSidebarOpen]);
-
-  // Lazily load the full project + org — they back only the Dependencies / Settings
-  // tabs, so we fetch them the first time one of those tabs is opened rather than on
-  // every project open. The ref keys on project id so swapping tabs back and forth
-  // doesn't refetch, but switching to a different project does.
-  const projectMetaLoadedForRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!projectSidebarOpen) { projectMetaLoadedForRef.current = null; return; }
-    if (!orgId || !selectedProjectId || projectSidebarTab === 'findings') return;
-    if (projectMetaLoadedForRef.current === selectedProjectId) return;
-    projectMetaLoadedForRef.current = selectedProjectId;
-    const pid = selectedProjectId;
-    let cancelled = false;
-    setProjectSidebarProjectLoading(true);
-    void (async () => {
-      const [projectR, orgR] = await Promise.allSettled([
-        api.getProject(orgId, pid),
-        api.getOrganization(orgId),
-      ]);
+      // A tick after the findings bundle settles, warm the full project (permissions +
+      // meta) so the Dependencies / Settings tabs open instantly instead of eating a
+      // click-time round-trip. The org is already in page memory, so this getProject is
+      // the only thing those tabs wait on — a single cheap row read. Running it after
+      // (not during) the bundle keeps the Findings first paint uncontended.
       if (cancelled) return;
-      setProjectSidebarProject(projectR.status === 'fulfilled' ? projectR.value : null);
-      setProjectSidebarOrganization(orgR.status === 'fulfilled' ? orgR.value : null);
-      setProjectSidebarProjectLoading(false);
+      try {
+        const proj = await api.getProject(orgId, pid);
+        if (!cancelled) setProjectSidebarProject(proj);
+      } catch {
+        /* leave null → the non-findings tabs show their "couldn't load" fallback */
+      } finally {
+        if (!cancelled) setProjectSidebarProjectLoading(false);
+      }
+
+      // Warm the Dependencies-tab list into its client cache from the (already-warm) server
+      // cache while we're here, so clicking that tab paints instantly from the seed instead
+      // of waiting on a click-time fetch. cachedOnly → cheap Redis read, never the heavy
+      // recompute; a cold-cache miss is a no-op and the tab loads fresh on click as before.
+      if (!cancelled) void warmProjectDepsCache(orgId, pid);
     })();
+
     return () => { cancelled = true; };
-  }, [projectSidebarOpen, orgId, selectedProjectId, projectSidebarTab]);
+    // findingsReloadNonce forces a refetch when the project's first scan completes
+    // (see the transition effect above) — the open-time fetch came back empty.
+  }, [orgId, selectedProjectId, projectSidebarOpen, findingsReloadNonce]);
 
   /** One row per (dependency, CVE); keeps highest depscore. Fixes duplicate rows / shared osv_id expansion. */
   const dedupedProjectVulnerabilities = useMemo(() => {
@@ -2980,6 +3052,10 @@ export default function OrganizationOverviewPage() {
             onExpandProject,
             isExpanding: data.projectId === expandingProjectId,
             expandedProjectId,
+            // White "selected" highlight on the node whose sidebar is open, so the
+            // graph mirrors the on-screen selection. Rebuilding here (rather than a
+            // separate patch) keeps it correct across data refreshes too.
+            isActive: projectSidebarOpen && data.projectId === selectedProjectId,
           },
         };
       }
@@ -2996,6 +3072,8 @@ export default function OrganizationOverviewPage() {
     expandedNodes,
     expandedEdges,
     onExpandProject,
+    projectSidebarOpen,
+    selectedProjectId,
     setGraphNodes,
     setGraphEdges,
   ]);
@@ -3715,7 +3793,22 @@ export default function OrganizationOverviewPage() {
                               {teamSettingsShowDeleteConfirm && (
                                 <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
                                   <p className="text-sm text-foreground">
-                                    To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{teamSidebarTeamData.name}</strong> below:
+                                    To confirm deletion, type{' '}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(teamSidebarTeamData.name);
+                                        setCopiedTeamName(true);
+                                        setTimeout(() => setCopiedTeamName(false), 2000);
+                                      }}
+                                      className="inline-flex items-center gap-1.5 align-middle text-destructive font-mono bg-destructive/10 hover:bg-destructive/20 px-1.5 py-0.5 rounded transition-colors"
+                                      aria-label={copiedTeamName ? 'Copied' : 'Copy team name'}
+                                      title={copiedTeamName ? 'Copied' : 'Copy team name'}
+                                    >
+                                      {copiedTeamName ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                      {teamSidebarTeamData.name}
+                                    </button>{' '}
+                                    below:
                                   </p>
                                   <input
                                     type="text"
@@ -3910,14 +4003,8 @@ export default function OrganizationOverviewPage() {
             >
               <div className="flex-shrink-0 flex items-center justify-between gap-4 px-5 pt-5 pb-5">
                 <div className="flex items-center gap-3 min-w-0">
-                  <FrameworkIcon frameworkId={selectedProjectFramework ?? undefined} size={20} className="flex-shrink-0 text-muted-foreground" />
+                  <FrameworkIcon frameworkId={selectedProjectFramework ?? undefined} size={26} className="flex-shrink-0 text-muted-foreground" />
                   <h2 className="text-lg font-semibold text-foreground truncate">{selectedProjectName ?? 'Project'}</h2>
-                  {selectedProjectEffectiveIsExtracting && !selectedProjectEffectiveIsInitialExtracting ? (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Syncing
-                    </span>
-                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -3957,7 +4044,7 @@ export default function OrganizationOverviewPage() {
               >
 {projectSidebarTab === 'findings' && (
                   <div className="space-y-4">
-                    {projectStats?.malicious_packages?.scan_status === 'partial' && (
+                    {maliciousScanStatus === 'partial' && (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                         <span className="font-semibold">Partial coverage:</span> the malicious-package scan
                         completed with gaps — some packages could not be scanned this run. Findings shown below
@@ -4057,11 +4144,14 @@ export default function OrganizationOverviewPage() {
                     )}
                   </div>
                 )}
-                {projectSidebarTab === 'dependencies' && projectSidebarProject && orgId && (
+                {projectSidebarTab === 'dependencies' && orgId && (projectSidebarProject || projectSidebarProjectLoading) && (
+                  // Render even while the project prefetch is in flight — ProjectDependenciesContent
+                  // shows its OWN package-list skeleton when project is null, so we never flash the
+                  // settings-shaped skeleton before the dependencies one.
                   <ProjectDependenciesContent
                     project={projectSidebarProject}
                     organizationId={orgId}
-                    userPermissions={projectSidebarProject.permissions ?? null}
+                    userPermissions={projectSidebarProject?.permissions ?? null}
                     reloadProject={async () => {
                       if (!orgId || !selectedProjectId) return;
                       const p = await api.getProject(orgId, selectedProjectId);
@@ -4084,29 +4174,27 @@ export default function OrganizationOverviewPage() {
                     embedInSidebar
                   />
                 )}
-                {projectSidebarTab === 'settings' && projectSidebarProject && projectSidebarOrganization && orgId && (
+                {projectSidebarTab === 'settings' && organization && orgId && (projectSidebarProject || projectSidebarProjectLoading) && (
+                  // Render even while the project prefetch is in flight — ProjectSettingsContent
+                  // shows its OWN settings-shaped skeleton when project is null, so the loading
+                  // and loaded states share the exact same layout + spacing (no separate skeleton).
                   <ProjectSettingsContent
                     project={projectSidebarProject}
                     organizationId={orgId}
-                    organization={projectSidebarOrganization}
-                    userPermissions={projectSidebarProject.permissions ?? null}
+                    organization={organization}
+                    userPermissions={projectSidebarProject?.permissions ?? null}
                     reloadProject={async () => {
                       if (!orgId || !selectedProjectId) return;
-                      const [p, o] = await Promise.all([api.getProject(orgId, selectedProjectId), api.getOrganization(orgId)]);
+                      const p = await api.getProject(orgId, selectedProjectId);
                       setProjectSidebarProject(p);
-                      setProjectSidebarOrganization(o);
                     }}
                     embedInSidebar
                     initialSection={projectSettingsSubTab}
                     onSectionChange={(s) => { setProjectSettingsSubTab(s); setSidebarParams({ subtab: s }); }}
                     onProjectRenamed={handleProjectRenamed}
                     onProjectTransferred={handleProjectTransferred}
+                    onProjectDeleted={handleProjectDeleted}
                   />
-                )}
-                {projectSidebarTab !== 'findings' && projectSidebarProjectLoading && (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                  </div>
                 )}
                 {projectSidebarTab !== 'findings' && !projectSidebarProjectLoading && !projectSidebarProject && (
                   <div className="py-8 text-center text-sm text-muted-foreground">Could not load project.</div>

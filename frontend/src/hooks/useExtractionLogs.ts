@@ -41,6 +41,15 @@ export function filterLog(log: ExtractionLog): boolean {
   if (/atom analysis in progress/.test(lower)) return false;
   if (/\d+\s*minute?\s*elapsed|elapsed\s*:\s*\d+/.test(lower)) return false;
   if (/scan still running.*dep-?scan is quiet/.test(lower)) return false;
+  // Per-package malicious-scan progress ("Scanned 450/1000 packages…"). The worker
+  // emits one per package as a throttled watchdog-liveness ping; it's pure churn in the
+  // user-facing log. The "Scanning packages…" kickoff + the completion line still show.
+  if (/^scanned\s+\d+\s*\/\s*\d+\s+packages/.test(lower)) return false;
+  // Per-language parser setup ("js setup complete", "go setup complete", "other setup
+  // complete") — the tree-sitter usage-extractor initialising each language's grammar.
+  // Internal plumbing, not a user milestone; drop it (it ends in "complete" so the
+  // clean-success rule below would otherwise keep it).
+  if (/\bsetup complete$/i.test(msg)) return false;
 
   // Same terminal look as before — we just drop the internal detail chatter and
   // keep the high-level milestones. The full logs still live in extraction_logs.
@@ -53,9 +62,39 @@ export function filterLog(log: ExtractionLog): boolean {
   // Clean "X done" lines (drop the verbose stat-dump successes like
   // "Emitted 15 flows…" / "71/71 scanned, 0 feed + 0 GuardDog hits…").
   if (log.level === 'success' && /(?:successfully|complete|generated)$/i.test(msg)) return true;
+  // The malicious-package scan's completion is a verbose stat dump ending in
+  // "(complete)"/"(partial)", so it misses the clean-success rule above. Keep it —
+  // it's a real milestone like SBOM / SAST — and rewriteLogMessage collapses it to a
+  // clean "Malicious packages scan complete" line.
+  if (log.level === 'success' && /new findings \((?:complete|partial)\)\s*$/i.test(msg)) return true;
+  // Infra/IaC scan resolution — the result of the "Scanning workspace for infra files…"
+  // kickoff. "IaC scan complete — N findings written" ends in "written", and the skip
+  // line is prose, so both miss the rules above. Keep them so the infra step shows a
+  // completion like the other scanners.
+  if (/^iac scan complete\b/i.test(msg)) return true;
+  if (/^no infra files detected\b/i.test(msg)) return true;
   // Everything else (framework-entry counts, OSV/PURL lines, EPD passes,
   // container reachability, native bindings, composition summaries, …) is noise.
   return false;
+}
+
+/**
+ * Display-time message rewrites: trim noisy specifics the worker logs but the user
+ * doesn't need. Currently drops the live package count from the malicious-scan kickoff
+ * line ("Scanning 1000 packages for malicious indicators…" → "Scanning packages for
+ * malicious indicators…") — the exact count is churn and can read as alarming.
+ */
+export function rewriteLogMessage(message: string): string {
+  // Collapse the verbose malicious-scan completion ("71/71 scanned …, 3 new findings
+  // (complete)") to a clean milestone line matching the other scanners ("SBOM
+  // generated", "SAST complete", …).
+  if (/new findings \((?:complete|partial)\)\s*$/i.test(message)) {
+    return 'Malicious packages scan complete';
+  }
+  return message.replace(
+    /^Scanning\s+\d+\s+packages\s+for\s+malicious\s+indicators/i,
+    'Scanning packages for malicious indicators',
+  );
 }
 
 // ─── Hook ───
@@ -128,7 +167,11 @@ export function useExtractionLogs({
     };
   }, [projectId, runId]);
 
-  const filteredLogs = logs.filter(filterLog);
+  const filteredLogs = logs.filter(filterLog).map((l) => {
+    if (!l.message) return l;
+    const message = rewriteLogMessage(l.message);
+    return message === l.message ? l : { ...l, message };
+  });
   const lastLog = logs[logs.length - 1];
   const isComplete = Boolean(lastLog?.step === 'complete' && (lastLog.level === 'success' || lastLog.level === 'error'));
   const hasError = Boolean(isComplete && lastLog?.level === 'error');

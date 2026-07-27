@@ -178,7 +178,7 @@ describe('resolveProjectVulnerability', () => {
   it('resolves CVE id within a project', async () => {
     const supabase = makeFakeSupabase({
       projects: [{ data: [{ id: 'p1', name: 'deptex-test-npm' }], error: null }],
-      project_dependency_vulnerabilities: [
+      project_dependency_findings: [
         { data: [{ id: 'v1', osv_id: 'GHSA-xxx' }], error: null },
       ],
     });
@@ -199,7 +199,7 @@ describe('resolveProjectVulnerability', () => {
   it('returns not-found error with project name when vuln missing', async () => {
     const supabase = makeFakeSupabase({
       projects: [{ data: [{ id: 'p1', name: 'deptex-test-npm' }], error: null }],
-      project_dependency_vulnerabilities: [{ data: [], error: null }],
+      project_dependency_findings: [{ data: [], error: null }],
     });
     const result = await resolveProjectVulnerability(
       'deptex-test-npm',

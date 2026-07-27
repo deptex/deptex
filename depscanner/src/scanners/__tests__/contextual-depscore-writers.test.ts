@@ -4,7 +4,7 @@
  * After doReachabilityAndEpd finishes, only two code paths inside the
  * depscanner pipeline mutate `contextual_depscore`:
  *
- *   - epd.ts — via `supabase.from('project_dependency_vulnerabilities')
+ *   - epd.ts — via `supabase.from('project_dependency_findings')
  *     .update({ contextual_depscore: ... })` from a handful of compute
  *     helpers (computeAggregate / zeroAggregate / Anthropic + heuristic
  *     fallbacks).
@@ -65,14 +65,14 @@ function* walkTs(base: string): Generator<string> {
 
 const DEPSCANNER_SRC = path.resolve(__dirname, '../../..', 'src');
 
-/** Files that contain a `.from('project_dependency_vulnerabilities')` chain
+/** Files that contain a `.from('project_dependency_findings')` chain
  *  followed within ~600 chars by a `.update(` or `.upsert(` — i.e. files that
  *  mutate PDVs. (R3 batched the three known per-row UPDATE loops into batched
  *  `.upsert(onConflict:'id')` flushes; they remain the sole PDV mutators.) */
 function filesMutatingPdv(): string[] {
   const out: string[] = [];
   // multiline-dot regex: handles chained calls on consecutive lines.
-  const re = /\.from\(\s*['"]project_dependency_vulnerabilities['"]\s*\)[\s\S]{0,600}?\.(?:update|upsert)\(/;
+  const re = /\.from\(\s*['"]project_dependency_findings['"]\s*\)[\s\S]{0,600}?\.(?:update|upsert)\(/;
   for (const file of walkTs(DEPSCANNER_SRC)) {
     const text = fs.readFileSync(file, 'utf8');
     if (re.test(text)) {
@@ -127,7 +127,7 @@ function filesInlineUpdatingContextual(): string[] {
 }
 
 describe('PDV.contextual_depscore sole-writer invariant', () => {
-  test('only known files mutate project_dependency_vulnerabilities via .update(...)/.upsert(...)', () => {
+  test('only known files mutate project_dependency_findings via .update(...)/.upsert(...)', () => {
     const files = new Set(filesMutatingPdv());
     // Allowlist (every PDV-mutation site outside this list is a violation).
     //  R3 batched each per-row UPDATE loop into a single .upsert(onConflict:'id'):

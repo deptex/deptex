@@ -64,6 +64,7 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
         logger: {
           info: async (step: string, msg: string) => log.info(step, msg),
           warn: async (step: string, msg: string) => log.warn(step, msg),
+          success: async (step: string, msg: string, durationMs?: number) => log.success(step, msg, durationMs),
         },
         onHeartbeat: async () => {
           if (heartbeat) await heartbeat();

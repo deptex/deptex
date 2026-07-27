@@ -495,7 +495,7 @@ Per-ecosystem:
 - For ~36 npm/pypi CVEs: `fixture_round_trip_failed: pre>0, post=0` — flows fire, but `validate.ts` Gate 2 only counts model-rule sinks (Spike A in 3-spike bundle).
 - For 9 maven CVEs: `fixture_round_trip_failed: pre=0, post=0` — model fixtures don't even trigger taint into the relaxed sinks; fixture-shape issue upstream of Gate 2 (Spike B in 3-spike bundle, NEW).
 
-Three spike memos with line-level grounding live in `.cursor/plans/depscanner-hardening-DAILY-LOG.md` ticks 38, 39, 41. All pending Henry sign-off.
+Three spike memos with line-level grounding are recorded in the depscanner-hardening daily log (git history), ticks 38, 39, 41. All pending Henry sign-off.
 
 ### OSS corpus scan (in flight)
 

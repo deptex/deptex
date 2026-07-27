@@ -7,6 +7,7 @@
 
 import type { Storage } from './storage';
 import type { ExtractionLogger } from './logger';
+import type { EntryPointAuthMap } from './taint-engine/match-flow-to-routes';
 
 /**
  * Logger interface for pipeline; full ExtractionLogger or minimal mock for tests.
@@ -135,4 +136,28 @@ export interface PipelineContext {
    * coverage.
    */
   astParsedSuccessfully: boolean;
+
+  /**
+   * Number of HTTP-route entry points framework detection found this run
+   * (`entryPointType === 'http_route'`). Set by usage_extraction from the
+   * already-detected entry points (NOT re-detected). Read by the reachability
+   * step as the "deployed web app" signal for the always-on framework-runtime
+   * promotion: >= 1 HTTP route ⇒ the framework's request-path runtime is live,
+   * so a CVE in an always-on component (servlet-container request parser, MVC
+   * resource handler) is genuinely reachable. 0 ⇒ a library/CLI repo, and the
+   * promotion is disabled (fail-safe). Defaults to 0.
+   */
+  httpEntryPointCount: number;
+
+  /**
+   * Per-file, per-route auth records (entry-point auth classification, T2).
+   * Built at usage_extraction from the detected entry points + cross-file
+   * postProcess records, keyed by project-relative POSIX path (byte-identical to
+   * a flow's `entry_point_file`). The taint engine's `writeFlows` joins each flow
+   * against this via `matchFlowToRoutes` to stamp `entry_point_tag`; the fp-filter
+   * reads it for route context. In-memory only — never persisted. Empty map until
+   * usage_extraction runs (fail-safe: no records ⇒ every flow stamps `unmatched`
+   * ⇒ PUBLIC weight, no merge vote).
+   */
+  entryPointAuth: EntryPointAuthMap;
 }

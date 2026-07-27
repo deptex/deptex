@@ -35,8 +35,6 @@ import NotFoundRedirect from "../components/NotFoundRedirect";
 import OrganizationFindingsPage from "./pages/OrganizationFindingsPage";
 import NewProjectPage from "./pages/NewProjectPage";
 import AegisPage from "./pages/AegisPage";
-import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
-import FlowEditorPage from "./pages/FlowEditorPage";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminOverviewPage from "./pages/admin/AdminOverviewPage";
 import AdminBillingPage from "./pages/admin/AdminBillingPage";
@@ -223,14 +221,6 @@ export const router = createBrowserRouter([
         element: <AegisPage />,
       },
       {
-        path: "flows",
-        element: <OrganizationFlowsPage />,
-      },
-      {
-        path: "flows/:flowId",
-        element: <FlowEditorPage />,
-      },
-      {
         path: "account",
         element: <Navigate to="general" replace />,
       },
@@ -347,10 +337,6 @@ export const router = createBrowserRouter([
       {
         path: "sbom-compliance",
         element: <Navigate to="/platform-features/dependency-scanning" replace />,
-      },
-      {
-        path: "repository-tracking",
-        element: <Navigate to="/docs/quick-start" replace />,
       },
       {
         path: "integrations",

@@ -39,7 +39,7 @@ Capture the brief verbatim into the daily log's `## Mission brief` section. **Re
    ```
    (Alternative: if `/create-worktree` was already run, just adopt that worktree.)
 3. **Initialize the two source-of-truth files in the worktree:**
-   - `.cursor/plans/<name>-DAILY-LOG.md` — tick-by-tick state of record. Header: mission start date, soft target end, worktree path, branch, base SHA, final delivery shape. First section: `## Mission brief` with verbatim user text. Then `## Operating model` (always-on tracks, cadence, comms cadence, PR shape). Then per-tick `## Tick N — DISPATCHED <date>` sections start landing.
+   - `.claude/plans/<name>-DAILY-LOG.md` — tick-by-tick state of record. Header: mission start date, soft target end, worktree path, branch, base SHA, final delivery shape. First section: `## Mission brief` with verbatim user text. Then `## Operating model` (always-on tracks, cadence, comms cadence, PR shape). Then per-tick `## Tick N — DISPATCHED <date>` sections start landing.
    - `docs/<name>-report.md` — living findings + competitive analysis + refactor targets + doc plans. Treat this as the public artifact the marathon is shipping; the daily log is the orchestration journal.
 4. **Update `active_sprint.md` memory** with: worktree path, branch, base SHA, first marathon commit (none yet), source-of-truth file paths, on-resume protocol. This is what the user (and post-compact me) will read to recover context.
 5. **First ScheduleWakeup** — dispatch the first wave of background subagents simultaneously, then schedule the next tick. The wakeup `prompt` field MUST include: worktree path, branch, recent commit SHAs (none yet — restate base SHA), the user's Slack DM channel ID (if known), source-of-truth file paths. See "Wakeup prompt template" below.
@@ -88,7 +88,7 @@ Recent marathon commits (newest first):
   <sha2> <subject>
   ...
 Source-of-truth files:
-  - <worktree>/.cursor/plans/<name>-DAILY-LOG.md
+  - <worktree>/.claude/plans/<name>-DAILY-LOG.md
   - <worktree>/docs/<name>-report.md
 Slack DM channel for the user: <channel-id>
 
@@ -290,6 +290,6 @@ Worktree / git safety:
 
 ## Reference: state files this skill creates
 
-- `<worktree>/.cursor/plans/<name>-DAILY-LOG.md` — orchestration journal, archived after marathon close.
+- `<worktree>/.claude/plans/<name>-DAILY-LOG.md` — orchestration journal, archived after marathon close.
 - `<worktree>/docs/<name>-report.md` — living findings, becomes the canonical subsystem reference.
 - `active_sprint.md` (memory) — pointer to the marathon's source-of-truth files; updated at setup, mid-flight on major state changes, and at close.

@@ -131,7 +131,11 @@ describe('ProjectSettingsPage – General', () => {
   it('shows the no-transfer-target message when there are no other teams', async () => {
     mockGetTeams.mockResolvedValue([]);
 
+    const user = userEvent.setup();
     render(<ProjectSettingsPage />);
+    // Transfer teams load lazily now — open the "New owner team" select to trigger the fetch;
+    // only after it returns empty does the no-target message replace the select.
+    await user.click(await screen.findByRole('button', { name: /Select a team/i }));
     await waitFor(() => {
       expect(screen.getByText(/No other teams to transfer to/)).toBeInTheDocument();
     });
@@ -279,9 +283,10 @@ describe('ProjectSettingsPage – General', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Project Name' })).toBeInTheDocument();
     });
-    const accessButton = screen.getAllByRole('button').find((b) => b.textContent === 'Access');
-    expect(accessButton).toBeDefined();
-    await userEvent.click(accessButton!);
-    expect(mockNavigate).toHaveBeenCalledWith('/organizations/org-1/projects/proj-1/settings/access');
+    // 'Access' is parked (removed from the nav) — use Repository, a section that's always present.
+    const repoButton = screen.getAllByRole('button').find((b) => b.textContent === 'Repository');
+    expect(repoButton).toBeDefined();
+    await userEvent.click(repoButton!);
+    expect(mockNavigate).toHaveBeenCalledWith('/organizations/org-1/projects/proj-1/settings/repository');
   });
 });

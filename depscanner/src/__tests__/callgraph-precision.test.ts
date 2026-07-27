@@ -119,7 +119,7 @@ interface PdvShape {
 
 function seedMulti(fsk: FakeStorage, pdvs: PdvShape[], usageStrings: string[] = []) {
   fsk.set(
-    'project_dependency_vulnerabilities',
+    'project_dependency_findings',
     pdvs.map((p) => ({
       id: p.pdvId,
       project_dependency_id: p.pdId,
@@ -169,7 +169,7 @@ function seedMulti(fsk: FakeStorage, pdvs: PdvShape[], usageStrings: string[] = 
 
 function verdictFor(fsk: FakeStorage, pdvId: string) {
   const u = fsk.updates.find(
-    (x) => x.table === 'project_dependency_vulnerabilities' && x.filter.id === pdvId,
+    (x) => x.table === 'project_dependency_findings' && x.filter.id === pdvId,
   );
   return { level: u?.values.reachability_level, details: u?.values.reachability_details };
 }

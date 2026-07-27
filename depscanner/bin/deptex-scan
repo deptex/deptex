@@ -126,11 +126,24 @@ fi
 # On Linux, Docker volume mounts preserve host UIDs, so files written by the
 # containerized `worker` user (UID 1000) become owned by UID 1000 on the host
 # — wrong for anyone whose host UID isn't 1000. Pass --user to run as the
-# invoking user instead. Docker Desktop (macOS/Windows) remaps automatically,
-# so this guard is Linux-only.
+# invoking user instead.
+#
+# On Windows Docker Desktop (WSL2 9p/virtiofs bind mounts) the mounted /output
+# is NOT writable by the non-root `worker` user — the pipeline dies immediately
+# with `EACCES: mkdir '/output/.buckets'`. Run the container as root there;
+# Docker Desktop remaps written files back to the invoking host user, so no
+# root-owned host files result (macOS Docker Desktop shares fine as-is). An
+# explicit DEPTEX_SCAN_AS_ROOT=1 opt-in forces root on any platform.
 USER_FLAG=()
-if [ "$(uname)" = "Linux" ]; then
+UNAME_S="$(uname -s)"
+if [ "$UNAME_S" = "Linux" ]; then
   USER_FLAG=(--user "$(id -u):$(id -g)")
+elif [ -n "${DEPTEX_SCAN_AS_ROOT:-}" ]; then
+  USER_FLAG=(--user 0:0)
+else
+  case "$UNAME_S" in
+    MINGW*|MSYS*|CYGWIN*) USER_FLAG=(--user 0:0) ;;  # Windows Docker Desktop
+  esac
 fi
 
 # Forward AI-provider env vars when set on the host. ANTHROPIC_API_KEY
@@ -200,6 +213,20 @@ fi
 # silent gaps observed on cargo/maven/some-npm — see pipeline-steps/osv-vuln-scan.ts).
 if [ -n "${DEPTEX_OSV_FALLBACK:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_OSV_FALLBACK=$DEPTEX_OSV_FALLBACK")
+fi
+
+# Arc 2 dep-import-graph knobs (pipeline-steps/dep-import-graph.ts): the pypi
+# leg's wall cap + dist cap, and the kill switch. Corpus runs raise the wall
+# cap (e.g. 900000) so per-dist wheel extraction completes deterministically —
+# CLI scans use in-memory PGLite, so the cross-org DB cache never warms there.
+if [ -n "${DEPTEX_DEP_IMPORT_WALL_MS:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_WALL_MS=$DEPTEX_DEP_IMPORT_WALL_MS")
+fi
+if [ -n "${DEPTEX_DEP_IMPORT_MAX_DISTS:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_MAX_DISTS=$DEPTEX_DEP_IMPORT_MAX_DISTS")
+fi
+if [ -n "${DEPTEX_DEP_IMPORT_DISABLE:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_DISABLE=$DEPTEX_DEP_IMPORT_DISABLE")
 fi
 
 # OpenAI-compatible third-party hosts (DeepInfra, OpenRouter, Alibaba). When

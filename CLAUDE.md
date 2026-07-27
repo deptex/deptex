@@ -12,12 +12,10 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - DB migrations: `backend/database/` (~140 SQL files). **If you add or modify a migration, also run `cd depscanner && npm run schema:dump` in the same PR to refresh `backend/database/schema.sql`.** That file is the source of truth for PGLite local-mode (depscanner CLI + CI smoke tests). CI (`.github/workflows/schema-check.yml`) fails PRs that touch a migration without refreshing it.
 - UI components: Radix primitives + Tailwind (shadcn pattern). Add via `npx shadcn@latest`
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow, `fly.md` for Fly.io deployment
-- See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
-- See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
-- See `docs/flow-code-sandbox.md` before changing the flow / policy code execution sandbox (isolated-vm setup, exposed helpers, return cap)
+- See `.claude/skills/add-new-features/SKILL.md` for where to add routes and libs
+- See `.claude/skills/frontend-design/SKILL.md` and `.claude/skills/ui-principles/SKILL.md` for UI standards
+- See `docs/flow-code-sandbox.md` before changing the policy code execution sandbox (isolated-vm setup, exposed helpers, return cap)
 - Dogfood corpus: `depscanner/test-repos/` holds 12 hand-authored framework fixtures (one per ecosystem we ship), each seeded with intentional vulnerabilities across every scanner category. `npm run dogfood:check` (in `depscanner/`) is the executable cross-batch regression gate; the runbook for the end-to-end manual walkthrough is `docs/runbooks/depscanner-dogfood.md`. Don't modify the upstream taint-engine fixtures in `depscanner/fixtures/test-*` — those are byte-stable inputs for the snapshot suite. The dogfood copies are intentionally separate.
-- Roadmap: `.cursor/plans/deptex_projects_roadmap_index.plan.md`
-
 ---
 
 ## Tech Stack
@@ -219,4 +217,4 @@ Composite vulnerability priority score. Uses `projects.importance` (a numeric sc
 
 All SQL migrations live in `backend/database/`. Files are prefixed by their original feature phase (e.g. `phase7b_aegis_platform.sql`, `phase18_epd_scoring.sql`); the prefix is historical and stable but carries no load-bearing ordering beyond what the filenames themselves imply. For a fresh install, run them in filename-sorted order. A dedicated migration runner is tracked for self-hosting readiness.
 
-Historical plan documents for each feature phase are archived in `.cursor/plans/archive/`.
+Historical per-phase plan documents were removed during the open-source cleanup and remain in git history.

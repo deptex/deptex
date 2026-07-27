@@ -3,7 +3,7 @@
  *
  * Proves that `updateReachabilityLevels` writes ONE `silence_events` row per PDV
  * per run, mapping every column to the in-scope classifier input, alongside the
- * existing project_dependency_vulnerabilities verdict write — without changing
+ * existing project_dependency_findings verdict write — without changing
  * that verdict. It boots the real backend/database/schema.sql (so the phase66
  * table + its unique constraint actually exist), seeds four PDVs that exercise
  * the four distinct silence verdicts, runs the classifier, and asserts the
@@ -91,7 +91,7 @@ async function seed(storage: PgStorage): Promise<void> {
   }
   // PDVs — these are what updateReachabilityLevels classifies.
   for (const f of ALL) {
-    const { error } = await storage.from('project_dependency_vulnerabilities').insert({
+    const { error } = await storage.from('project_dependency_findings').insert({
       id: f.pdvId,
       project_id: PROJECT,
       project_dependency_id: f.pdId,
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
   // --- the silence write must NOT change the PDV verdict it mirrors ---
   {
     const { data: pdvRows } = await storage
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('id, reachability_level, is_reachable')
       .eq('extraction_run_id', RUN);
     const pdvByPdv = new Map<string, any>((pdvRows ?? []).map((r: any) => [r.id, r]));

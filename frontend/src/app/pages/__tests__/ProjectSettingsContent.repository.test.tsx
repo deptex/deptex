@@ -37,6 +37,13 @@ vi.mock('react-router-dom', async (importOriginal) => {
 vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
+    // The Repository settings tab now loads via the status-only endpoint (connected repo only,
+    // no slow provider.listRepositories()). Derive it from the same fixture the tests already
+    // set on getProjectRepositories so each beforeEach keeps working unchanged.
+    getProjectRepositoryStatus: async (...args: unknown[]) => {
+      const full = (await mockGetProjectRepositories(...args)) as { connectedRepository?: unknown } | undefined;
+      return { connectedRepository: full?.connectedRepository ?? null };
+    },
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
@@ -125,22 +132,24 @@ describe('ProjectSettingsPage – Repository', () => {
       });
     });
 
-    it('shows the project path within the repository', async () => {
+    it('shows the project path within the repository as ./<path>', async () => {
       render(<ProjectSettingsPage />);
       await waitFor(() => {
-        expect(screen.getByText('/packages/api')).toBeInTheDocument();
+        expect(screen.getByText('./packages/api')).toBeInTheDocument();
       });
     });
 
-    it('shows "Repository root" when the project is at the repo root', async () => {
+    it('hides the path subtext when the project is at the repo root', async () => {
       mockGetProjectRepositories.mockResolvedValue({
         repositories: [],
         connectedRepository: { ...connectedRepo, package_json_path: '' },
       });
       render(<ProjectSettingsPage />);
       await waitFor(() => {
-        expect(screen.getByText('Repository root')).toBeInTheDocument();
+        expect(screen.getByText('org/my-repo')).toBeInTheDocument();
       });
+      // At the repo root the manifest sub-path line is hidden entirely (no "./..." text).
+      expect(screen.queryByText(/^\.\//)).not.toBeInTheDocument();
     });
 
     it('shows Sync Frequency section with the commit toggle and floor options', async () => {

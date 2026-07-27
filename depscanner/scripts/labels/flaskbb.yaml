@@ -1,0 +1,176 @@
+# flaskbb v2.1.0 (flaskbb/flaskbb) — Flask/FastAPI reachability model (Arc 4a) blind triage + adversarial verify 2026-07-03.
+cves:
+  - id: CVE-2021-23727
+    dep: celery
+    expected_reachability: module
+  - id: CVE-2024-39689
+    dep: certifi
+    expected_reachability: module
+  - id: CVE-2022-23491
+    dep: certifi
+    expected_reachability: module
+  - id: CVE-2023-37920
+    dep: certifi
+    expected_reachability: module
+  - id: CVE-2023-29483
+    dep: dnspython
+    expected_reachability: module
+  - id: CVE-2026-27205
+    dep: Flask
+    expected_reachability: function
+  - id: CVE-2023-30861
+    dep: Flask
+    expected_reachability: function
+  - id: CVE-2021-33026
+    dep: Flask-Caching
+    expected_reachability: module
+  - id: CVE-2026-45409
+    dep: idna
+    expected_reachability: data_flow
+  - id: CVE-2024-3651
+    dep: idna
+    expected_reachability: data_flow
+  - id: CVE-2025-27516
+    dep: Jinja2
+    expected_reachability: unreachable
+  - id: CVE-2024-56201
+    dep: Jinja2
+    expected_reachability: unreachable
+  - id: CVE-2024-22195
+    dep: Jinja2
+    expected_reachability: unreachable
+  - id: CVE-2024-34064
+    dep: Jinja2
+    expected_reachability: unreachable
+  - id: CVE-2024-56326
+    dep: Jinja2
+    expected_reachability: unreachable
+  - id: CVE-2026-44307
+    dep: Mako
+    expected_reachability: unreachable
+  - id: CVE-2026-41205
+    dep: Mako
+    expected_reachability: unreachable
+  - id: CVE-2022-40023
+    dep: Mako
+    expected_reachability: unreachable
+  - id: CVE-2026-44896
+    dep: mistune
+    expected_reachability: unreachable
+  - id: CVE-2026-44708
+    dep: mistune
+    expected_reachability: unreachable
+  - id: CVE-2026-44897
+    dep: mistune
+    expected_reachability: unreachable
+  - id: CVE-2023-50447
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2024-28219
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2023-44271
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2022-22817
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2022-24303
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2023-4863
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2022-45198
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2022-22815
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2022-22816
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2026-42310
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2026-42308
+    dep: Pillow
+    expected_reachability: module
+  - id: GHSA-4fx9-vc88-q2xc
+    dep: Pillow
+    expected_reachability: module
+  - id: PYSEC-2023-175
+    dep: Pillow
+    expected_reachability: module
+  - id: CVE-2026-4539
+    dep: Pygments
+    expected_reachability: data_flow
+  - id: CVE-2022-40896
+    dep: Pygments
+    expected_reachability: data_flow
+  - id: CVE-2024-47081
+    dep: requests
+    expected_reachability: data_flow
+  - id: CVE-2024-35195
+    dep: requests
+    expected_reachability: module
+  - id: CVE-2026-25645
+    dep: requests
+    expected_reachability: module
+  - id: CVE-2023-32681
+    dep: requests
+    expected_reachability: module
+  - id: CVE-2025-66471
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2024-37891
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2026-21441
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2023-45803
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2025-66418
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2025-50181
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2026-44431
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2023-43804
+    dep: urllib3
+    expected_reachability: module
+  - id: CVE-2026-27199
+    dep: Werkzeug
+    expected_reachability: unreachable
+  - id: CVE-2024-34069
+    dep: Werkzeug
+    expected_reachability: unreachable
+  - id: CVE-2026-21860
+    dep: Werkzeug
+    expected_reachability: unreachable
+  - id: CVE-2024-49766
+    dep: Werkzeug
+    expected_reachability: unreachable
+  - id: CVE-2025-66221
+    dep: Werkzeug
+    expected_reachability: unreachable
+  - id: CVE-2023-46136
+    dep: Werkzeug
+    expected_reachability: data_flow
+  - id: CVE-2023-23934
+    dep: Werkzeug
+    expected_reachability: data_flow
+  - id: CVE-2024-49767
+    dep: Werkzeug
+    expected_reachability: data_flow
+  - id: CVE-2023-25577
+    dep: Werkzeug
+    expected_reachability: data_flow
+  - id: CVE-2022-29361
+    dep: Werkzeug
+    expected_reachability: unreachable

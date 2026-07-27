@@ -4,7 +4,7 @@ You are creating a detailed, step-by-step implementation plan for a new Deptex f
 
 ## Inputs
 
-Look for the feature brief in `.cursor/plans/feature-brief-*.md`. If no brief exists, ask the user to run `/interview` first, or ask them to describe the feature so you can work from that.
+Look for the feature brief in `.claude/plans/feature-brief-*.md`. If no brief exists, ask the user to run `/interview` first, or ask them to describe the feature so you can work from that.
 
 ## Planning Process
 
@@ -13,9 +13,9 @@ Look for the feature brief in `.cursor/plans/feature-brief-*.md`. If no brief ex
 Before writing any plan:
 - Read the feature brief thoroughly
 - Read CLAUDE.md for architecture context
-- Read `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
-- Read `.cursor/skills/frontend-design/SKILL.md` for UI standards
-- Check the roadmap at `.cursor/plans/deptex_projects_roadmap_index.plan.md` for related phases
+- Read `.claude/skills/add-new-features/SKILL.md` for where to add routes and libs
+- Read `.claude/skills/frontend-design/SKILL.md` for UI standards
+- Check the roadmap at `.claude/plans/deptex_projects_roadmap_index.plan.md` for related phases
 
 ### Step 2: Competitive & Best Practices Research
 
@@ -75,7 +75,7 @@ For each page/view:
 - Route definition (add to `frontend/src/app/routes.tsx`)
 - State management approach (local state, context, URL params)
 - Data fetching pattern (useEffect + fetch, or existing patterns)
-- Layout choice referencing `.cursor/skills/frontend-design/SKILL.md`
+- Layout choice referencing `.claude/skills/frontend-design/SKILL.md`
 - Key UI components needed (existing shadcn components vs new custom ones)
 - **Reference competitor/industry patterns** from your research — "similar to how Snyk shows X" or "following the Linear pattern for Y"
 - Loading states, empty states, error states
@@ -120,7 +120,7 @@ Recommended task ordering:
 
 ## Output Format
 
-Write the plan to `.cursor/plans/{feature-name}.plan.md` using this structure:
+Write the plan to `.claude/plans/{feature-name}.plan.md` using this structure:
 
 ```markdown
 # {Feature Name} — Implementation Plan

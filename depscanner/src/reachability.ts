@@ -8,6 +8,54 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import type { Storage } from './storage';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
+import {
+  type SpringFeatureSignals,
+  gatherSpringFeatureSignals,
+  evaluateFeaturePreconditionDemotion,
+  evaluateAlwaysOnRuntimePromotion,
+  evaluateFrameworkMediatedUsage,
+} from './reachability-feature-preconditions';
+import {
+  type SymfonyFeatureSignals,
+  gatherSymfonyFeatureSignals,
+  evaluateSymfonyFeaturePreconditionDemotion,
+  evaluateComposerDevOnlyDemotion,
+  evaluateSymfonyAlwaysOnRuntimePromotion,
+} from './reachability-symfony-preconditions';
+import {
+  type RailsFeatureSignals,
+  gatherRailsFeatureSignals,
+  evaluateRailsFeaturePreconditionDemotion,
+  evaluateRailsDevOnlyDemotion,
+  evaluateRailsAlwaysOnRuntimePromotion,
+} from './reachability-rails-preconditions';
+import {
+  type GoImportSignals,
+  gatherGoImportSignals,
+  evaluateGoSubpackageDemotion,
+  evaluateGoAlwaysOnRuntimePromotion,
+} from './reachability-go-preconditions';
+import {
+  type DjangoFeatureSignals,
+  gatherDjangoFeatureSignals,
+  evaluateDjangoFeaturePreconditionDemotion,
+  evaluateDjangoDevOnlyDemotion,
+  evaluateDjangoAlwaysOnRuntimePromotion,
+} from './reachability-django-preconditions';
+import {
+  type LaravelFeatureSignals,
+  gatherLaravelFeatureSignals,
+  evaluateLaravelFeaturePreconditionDemotion,
+  evaluateLaravelAlwaysOnRuntimePromotion,
+} from './reachability-laravel-preconditions';
+import {
+  type FlaskFeatureSignals,
+  gatherFlaskFeatureSignals,
+  evaluateFlaskFeaturePreconditionDemotion,
+  evaluateFlaskDevOnlyDemotion,
+  evaluateFlaskAlwaysOnRuntimePromotion,
+} from './reachability-flask-preconditions';
+import { unionImportedModules, type TransitiveImportIndex } from './transitive-imports';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -343,7 +391,7 @@ async function matchPromptsToFlows(
 }
 
 // ---------------------------------------------------------------------------
-// Update reachability levels on project_dependency_vulnerabilities
+// Update reachability levels on project_dependency_findings
 // ---------------------------------------------------------------------------
 
 /**
@@ -477,6 +525,126 @@ export interface UpdateReachabilityOptions {
    * behavior.
    */
   isClientSpaProject?: boolean;
+  /**
+   * Feature-precondition gate (reachability noise reduction). Pre-gathered
+   * project-feature signals used to DEMOTE a `module` /
+   * `callgraph_reached_transitive` finding to `unreachable` when the framework
+   * feature its CVE requires is PROVABLY ABSENT (see
+   * `reachability-feature-preconditions.ts`).
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot`
+   * for the `maven` ecosystem (and skips the gate entirely otherwise). Tests
+   * inject signals directly to exercise the gate without a filesystem. An
+   * unrecognized / empty signals object refuses every demotion (fail-safe).
+   */
+  springFeatureSignals?: SpringFeatureSignals;
+  /**
+   * Always-on framework-runtime PROMOTION gate (reachability silence-FN
+   * recovery). The number of HTTP-route entry points framework detection found
+   * this run. `> 0` marks the project a DEPLOYED WEB APP, which is the required
+   * precondition for promoting a `module` finding whose CVE lives in always-on
+   * framework-runtime code (servlet-container request parser, MVC resource
+   * handler) to a visible tier — see `reachability-feature-preconditions.ts`
+   * (`ALWAYS_ON_RUNTIME` + `evaluateAlwaysOnRuntimePromotion`). `0` / undefined
+   * disables every promotion (a library repo must not get promotions).
+   * Threaded from usage_extraction's already-detected entry points (never
+   * re-detected); tests inject it directly.
+   */
+  httpEntryPointCount?: number;
+  /**
+   * PHP / Symfony feature-precondition + always-on-runtime signals — the
+   * composer-ecosystem mirror of `springFeatureSignals` (see
+   * `reachability-symfony-preconditions.ts`). Used to DEMOTE a `module` composer
+   * finding to `unreachable` when its Symfony feature is provably absent (Twig
+   * sandbox, untrusted-YAML parse, x509 firewall, `unanimous` strategy) or the
+   * package is DEV-ONLY (composer.lock `packages-dev`), and to PROMOTE always-on
+   * request-path CVEs (http-foundation Request parsing, the security firewall
+   * login path) to a visible tier on a deployed web app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `composer` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Symfony signals object refuses every move.
+   */
+  symfonyFeatureSignals?: SymfonyFeatureSignals;
+  /**
+   * Ruby/Rails framework-mediated reachability signals — the RubyGems mirror of
+   * `symfonyFeatureSignals`. Used to DEMOTE `module`→`unreachable` when a CVE's
+   * required gem feature is provably absent (Rack::Static/Directory, Nokogiri
+   * XSLT/Schema, Oj streaming APIs, rails-ujs, a Windows-only bug) or the gem is
+   * DEV-ONLY (Gemfile `:development`/`:test`/`:assets` group), and to PROMOTE
+   * always-on request-path CVEs (Puma, Rack request parsing, ActionDispatch, Oj
+   * codec, the Rails HTML sanitizer stack) to a visible tier on a deployed app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `gem` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Rails signals object refuses every move.
+   */
+  railsFeatureSignals?: RailsFeatureSignals;
+  /**
+   * Go framework-mediated reachability signals — the Go-module mirror of the
+   * dynamic-framework models, but keyed on the PRECISE subpackage import graph.
+   * Used to DEMOTE `module`→`unreachable` when a CVE's affected subpackage is
+   * provably not imported (x/crypto/ssh on a non-SSH server; x/net/html on a
+   * server that parses no HTML) and to PROMOTE always-on request-path CVEs
+   * (x/net/http2 on a deployed HTTP/2 server) to a visible tier.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `golang` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Go signals object refuses every move.
+   */
+  goImportSignals?: GoImportSignals;
+  /**
+   * Arc 2 (dependency-source import graphs): the transitive import index the
+   * dep-import-graph pipeline step computed for this run — `go list -deps`
+   * compile set (golang) or per-dist wheel import/token extraction (pypi).
+   * Merged into the matching ecosystem's signals object (NEW object, injected
+   * fields win, transitive data only in new fields) so the demotion pass and
+   * the promotion wouldDemote backstop see identical answers. Absent =
+   * today's behavior everywhere. Tests inject either this or pre-merged
+   * signals fields directly.
+   */
+  transitiveImports?: TransitiveImportIndex;
+  /**
+   * Python/Django framework-mediated reachability signals — the pypi mirror of
+   * the dynamic-framework models plus a Go-style SUBMODULE import gate. Used to
+   * DEMOTE `module`→`unreachable` when a CVE's required feature is provably
+   * absent (a pillow/cryptography submodule the first-party import set never
+   * touches, django.contrib.humanize never referenced, a Windows-only bug, the
+   * h11 parser shadowed by httptools, setuptools' build-time PackageIndex) or
+   * the package is DEV-ONLY (poetry dev groups / Pipfile dev-packages /
+   * requirements-dev.txt), and to PROMOTE always-on request-path CVEs
+   * (django uri_to_iri / response logging / validator ReDoS, pillow WebP decode
+   * on an image-upload surface) to a visible tier on a deployed app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot`
+   * for the `pypi` ecosystem (and skips the gate otherwise). Tests inject
+   * signals directly. An unrecognized / non-Django signals object refuses
+   * every move.
+   */
+  djangoFeatureSignals?: DjangoFeatureSignals;
+  /**
+   * Flask/FastAPI framework-mediated reachability signals — the SECOND pypi model
+   * beside Django (a Flask/FastAPI app carries no django dep, so Django's
+   * `recognized` is false there, and vice-versa). Injected by unit tests.
+   */
+  flaskFeatureSignals?: FlaskFeatureSignals;
+  /**
+   * Laravel framework-mediated reachability signals — a SECOND composer-ecosystem
+   * model beside `symfonyFeatureSignals` (a Laravel app carries no
+   * symfony/framework-bundle, so the Symfony model does not recognize it). Used to
+   * DEMOTE `module`→`unreachable` when a laravel/framework CVE's required feature
+   * is provably absent (no signed-URL API anywhere) and to PROMOTE always-on
+   * request-path CVEs to a visible tier when the feature is present (signed URLs
+   * in use → signed-URL path-confusion; file-upload validation in use →
+   * file-validation bypass). Every row is feature-gated because the same
+   * laravel/framework CVE is reachable on one app and not another (monica uses
+   * signed URLs, koel does not).
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `composer` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Laravel signals object refuses every move.
+   */
+  laravelFeatureSignals?: LaravelFeatureSignals;
 }
 
 /**
@@ -670,6 +838,46 @@ export function tokenBoundaryIncludes(haystack: string, needle: string): boolean
 }
 
 /**
+ * Bare, extremely-common method names that — on their own — are NOT evidence a
+ * CVE's vulnerable function is reached. These identifiers hang off countless
+ * unrelated classes across every ecosystem (`logger.error`, `cache.get`,
+ * `router.handle`, `console.log`, `queue.send` …), so a usage whose only tie to
+ * a dependency is a same-named bare call is noise, not a call-path proof.
+ *
+ * The usage heuristic below (`isDepUsed`) matches a CVE's dependency by
+ * substring, so a CVE whose vulnerable surface is one of these words gets
+ * lifted to `function` the instant ANY like-named call exists anywhere in the
+ * project — the symfony/demo CVE-2020-5274 false positive (matched the
+ * unrelated Console `SymfonyStyle->error()` call) is the canonical case. When
+ * the ONLY matched call is a bare word from this set, we require a stronger,
+ * qualifying signal before promoting (see `COMMON_BARE_METHODS` usage in the
+ * classifier). Distinctive names — deserialization verbs (`readValue`, `load`,
+ * `unserialize`, `deserialize`), template/render helpers with a real name
+ * (`template`, `safeLoad`), etc. — are deliberately NOT listed here, so a CVE
+ * whose sink IS a distinctive method still promotes on its own. Keep entries
+ * lowercase and in bare (last-segment) form.
+ */
+export const COMMON_BARE_METHODS: ReadonlySet<string> = new Set([
+  'error', 'warn', 'warning', 'info', 'log', 'debug',
+  'get', 'set', 'run', 'handle', 'send', 'render',
+  'write', 'read', 'add', 'remove', 'execute', 'call',
+]);
+
+/**
+ * Last bare segment of a resolved-method / callee string, lowercased. Splits on
+ * any non-identifier separator so `org.apache.logging.log4j.Logger.error`,
+ * `SymfonyStyle::error`, `mapper->readValue`, and a bare `error` all reduce to
+ * their trailing method name (`error`, `error`, `readvalue`, `error`). Used by
+ * the bare-common-method guard to decide whether a matched usage is a
+ * distinctive call-path signal or an ambiguous same-named collision.
+ */
+export function bareMethodName(resolvedMethod: string | null | undefined): string {
+  if (!resolvedMethod) return '';
+  const segs = resolvedMethod.toLowerCase().split(/[^a-z0-9_$]+/).filter(Boolean);
+  return segs.length ? segs[segs.length - 1] : '';
+}
+
+/**
  * Ecosystems where source code MUST explicitly `use`/`import` a package to
  * exercise it, so `files_importing_count === 0` is strong negative evidence
  * even on a directly-declared dep. Hoisted to module scope (R1) so the
@@ -688,8 +896,8 @@ export async function updateReachabilityLevels(
   options: UpdateReachabilityOptions = {},
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
-    .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, osv_id, aliases')
+    .from('project_dependency_findings')
+    .select('id, project_dependency_id, osv_id, aliases, summary')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
@@ -1101,6 +1309,103 @@ export async function updateReachabilityLevels(
   // Used by the callgraph-reach matcher to bridge maven artifactIds (e.g.
   // `jackson-core`) and Java FQN packages (e.g. `com.fasterxml.jackson.*`).
   const depNamespaceCache = new Map<string, string | null>();
+
+  // Feature-precondition gate signals (reachability noise reduction). Gathered
+  // ONCE per run. Only the Java/Spring (maven) ecosystem is modelled today; for
+  // every other ecosystem the signals stay unrecognized and the gate is a
+  // no-op. Tests inject `options.springFeatureSignals` to exercise the gate
+  // without a filesystem. Failure to read the workspace yields an unrecognized
+  // signals object, which refuses every demotion (fail-safe).
+  const featureSignals: SpringFeatureSignals | null =
+    options.springFeatureSignals ??
+    (options.ecosystem === 'maven' ? gatherSpringFeatureSignals(workspaceRoot) : null);
+  // PHP/Symfony feature-precondition + always-on-runtime signals — the composer
+  // mirror of `featureSignals`. Gathered ONCE per run; only the composer
+  // ecosystem is modelled today (a non-Symfony composer app yields unrecognized
+  // signals → the gate is a no-op). Tests inject `options.symfonyFeatureSignals`.
+  const symfonySignals: SymfonyFeatureSignals | null =
+    options.symfonyFeatureSignals ??
+    (options.ecosystem === 'composer' ? gatherSymfonyFeatureSignals(workspaceRoot) : null);
+  // Ruby/Rails framework-mediated signals — the gem mirror of `symfonySignals`.
+  // Gathered ONCE per run; only the `gem` ecosystem is modelled (a non-Rails gem
+  // app yields unrecognized signals → the gate is a no-op). Tests inject
+  // `options.railsFeatureSignals`.
+  const railsSignals: RailsFeatureSignals | null =
+    options.railsFeatureSignals ??
+    (options.ecosystem === 'gem' ? gatherRailsFeatureSignals(workspaceRoot) : null);
+  // Go framework-mediated signals — the Go-module mirror, keyed on the PRECISE
+  // subpackage import graph (see reachability-go-preconditions.ts). Gathered ONCE
+  // per run; only the `golang` ecosystem is modelled. `isDeployedHttpServer` is
+  // the Go stand-in for the http-route-entry-point signal (a caddy-shaped server
+  // routes via its own module system, so the framework detectors emit 0 routes).
+  const goSignalsBase: GoImportSignals | null =
+    options.goImportSignals ??
+    (options.ecosystem === 'golang' ? gatherGoImportSignals(workspaceRoot) : null);
+  // Arc 2 merge (pinned rule): construct a NEW object — never mutate an
+  // injected signals object; injected transitive fields win; transitive data
+  // lives ONLY in the new fields; the index applies only to its own ecosystem.
+  // Both the demotion pass and the promotion wouldDemote backstop read this
+  // one merged object, so the two passes stay consistent automatically.
+  const goTransitiveIdx: TransitiveImportIndex | null =
+    options.transitiveImports?.ecosystem === 'golang' ? options.transitiveImports : null;
+  const goSignals: GoImportSignals | null = goSignalsBase
+    ? goTransitiveIdx &&
+      goSignalsBase.transitiveImportedPackages === undefined &&
+      goTransitiveIdx.status !== 'unavailable'
+      ? {
+          ...goSignalsBase,
+          transitiveImportedPackages: unionImportedModules(goTransitiveIdx),
+          transitiveComplete: goTransitiveIdx.status === 'complete',
+        }
+      : goSignalsBase
+    : null;
+  const goServerReachable = goSignals?.isDeployedHttpServer ?? false;
+  // Python/Django framework-mediated signals — the pypi mirror. Gathered ONCE
+  // per run; only the `pypi` ecosystem is modelled (a non-Django Python app
+  // yields unrecognized signals → the gate is a no-op). Tests inject
+  // `options.djangoFeatureSignals`. `isDeployedWebApp` is the pypi stand-in for
+  // the http-route-entry-point signal (a GraphQL-only Django app may emit 0
+  // detected HTTP routes even though it serves requests).
+  const pypiTransitiveIdx: TransitiveImportIndex | null =
+    options.transitiveImports?.ecosystem === 'pypi' ? options.transitiveImports : null;
+  const djangoSignalsBase: DjangoFeatureSignals | null =
+    options.djangoFeatureSignals ??
+    (options.ecosystem === 'pypi' ? gatherDjangoFeatureSignals(workspaceRoot) : null);
+  // Same pinned Arc 2 merge rule as goSignals above.
+  const djangoSignals: DjangoFeatureSignals | null = djangoSignalsBase
+    ? pypiTransitiveIdx && djangoSignalsBase.transitiveImports === undefined
+      ? { ...djangoSignalsBase, transitiveImports: pypiTransitiveIdx }
+      : djangoSignalsBase
+    : null;
+  const djangoDeployed = djangoSignals?.isDeployedWebApp ?? false;
+  // Flask/FastAPI framework-mediated signals — a SECOND pypi model beside
+  // `djangoSignals`. A Flask/FastAPI app carries no django dep (so the Django
+  // model's `recognized` is false there) and vice-versa, so the two never both
+  // fire. Gathered ONCE per run for the pypi ecosystem; a non-Flask/FastAPI pypi
+  // app yields unrecognized signals → no-op. Tests inject `options.flaskFeatureSignals`.
+  const flaskSignalsBase: FlaskFeatureSignals | null =
+    options.flaskFeatureSignals ??
+    (options.ecosystem === 'pypi' ? gatherFlaskFeatureSignals(workspaceRoot) : null);
+  // Same pinned Arc 2 merge rule (no Flask row consults it in v1 — type parity).
+  const flaskSignals: FlaskFeatureSignals | null = flaskSignalsBase
+    ? pypiTransitiveIdx && flaskSignalsBase.transitiveImports === undefined
+      ? { ...flaskSignalsBase, transitiveImports: pypiTransitiveIdx }
+      : flaskSignalsBase
+    : null;
+  const flaskDeployed = flaskSignals?.isDeployedWebApp ?? false;
+  // Laravel framework-mediated signals — a SECOND composer-ecosystem model beside
+  // `symfonySignals` (a Laravel app carries no symfony/framework-bundle, so the
+  // Symfony model's `recognized` is false there). Gathered ONCE per run for the
+  // composer ecosystem; a non-Laravel composer app yields unrecognized signals →
+  // the gate is a no-op. Tests inject `options.laravelFeatureSignals`.
+  const laravelSignals: LaravelFeatureSignals | null =
+    options.laravelFeatureSignals ??
+    (options.ecosystem === 'composer' ? gatherLaravelFeatureSignals(workspaceRoot) : null);
+  // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
+  // this is a deployed web app, so a CVE in an always-on framework component is
+  // genuinely on the request path. Gathered once per run from the already-
+  // detected entry-point count threaded via options (never re-detected here).
+  const hasHttpRouteEntryPoint = (options.httpEntryPointCount ?? 0) > 0;
   let updatedCount = 0;
   let detailsSetCount = 0;
   const levelCounts: Record<string, number> = {
@@ -1269,6 +1574,13 @@ export async function updateReachabilityLevels(
         depNamespaceCache.set(pdv.project_dependency_id, depNamespace);
       }
 
+      // Composer packages are `vendor/name` (cdxgen splits them into
+      // namespace=`vendor` + name=`name`). Reconstruct the full name so the
+      // Symfony DEV-ONLY demotion can match it against composer.lock's
+      // `packages-dev` (which carries full `symfony/process`-style names).
+      const composerPackage =
+        depNamespace ? `${depNamespace.toLowerCase()}/${(depName as string).toLowerCase()}` : (depName as string).toLowerCase();
+
       // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted
       // FrameworkSpec sink loaded for this PDV's CVE, we know the *specific*
       // vulnerable call pattern — verify it is on a call path instead of the
@@ -1311,7 +1623,6 @@ export async function updateReachabilityLevels(
 
       if (!devScoped && !symbolClassified) {
       if (depName && isDepUsed(depName)) {
-        level = 'function';
         // Populate details with matching usage data (file, line, methods called)
         const lower = depName.toLowerCase();
         const dotted = lower.replace(/-/g, '.');
@@ -1322,7 +1633,36 @@ export async function updateReachabilityLevels(
           return t.includes(lower) || t.includes(dotted) || m.includes(lower) || m.includes(dotted)
             || (firstPart.length > 3 && (t.includes(firstPart) || m.includes(firstPart)));
         });
-        if (matchingUsages.length > 0) {
+        // Bare-common-method guard (precision). The filter above matches on a
+        // substring of the dependency name, so a CVE whose vulnerable call is a
+        // bare, extremely-common word (`error`, `get`, `handle`, …) is lifted to
+        // `function` the moment ANY same-named call exists anywhere — even one
+        // on an unrelated class. (symfony/demo CVE-2020-5274 matched the Console
+        // `SymfonyStyle->error()` at CheckRequirementsSubscriber.php:67, a call
+        // that has nothing to do with the CVE's real TwigBundle sink.) Require a
+        // genuine call-path signal before promoting: at least one matched usage
+        // whose bare method is distinctive (not a common ambiguous word) OR whose
+        // receiver/class carries a distinctive segment of the dependency name
+        // (e.g. `…log4j.Logger.error` — `log4j` qualifies the bare `error`).
+        // `firstPart`/`lower`/`dotted` tokens that are themselves a common bare
+        // word (a dep literally named `send` / `error-handler`) can't self-
+        // qualify — they must appear on the *receiver*, not just collide with a
+        // bare method. Deserialization verbs (`readValue`, `load`, `unserialize`)
+        // and library-specific calls (`template`, `safeLoad`) are distinctive, so
+        // a CVE whose sink IS one of those still promotes. When ONLY bare common
+        // methods matched, keep the finding at `module` (used-but-unproven) —
+        // never invent a `function` verdict from an ambiguous name collision.
+        const depQualifierTokens = [lower, dotted, firstPart].filter(
+          (t, i, a) => t.length >= 4 && !COMMON_BARE_METHODS.has(t) && a.indexOf(t) === i,
+        );
+        const strongUsages = matchingUsages.filter((u: any) => {
+          const method = bareMethodName(u.resolved_method);
+          if (method && !COMMON_BARE_METHODS.has(method)) return true;
+          const receiver = (u.target_type ?? '').toLowerCase();
+          return depQualifierTokens.some((tok) => receiver.includes(tok));
+        });
+        if (strongUsages.length > 0) {
+          level = 'function';
           const files = [...new Set(matchingUsages.map((u: any) => u.file_path).filter(Boolean))];
           const methods = [...new Set(matchingUsages.map((u: any) => u.resolved_method).filter(Boolean))];
           const locations = matchingUsages
@@ -1366,6 +1706,20 @@ export async function updateReachabilityLevels(
           options.usedTransitives !== undefined && options.usedTransitives.size > 0;
         const callgraphReachedThisDep =
           callgraphRan && depMatchesUsedTransitives(depName, depNamespace, options.usedTransitives!);
+        // FRAMEWORK-MEDIATED USAGE (silence-FN recovery). A transitive dep that
+        // no app file imports can still be exercised entirely through framework
+        // DISPATCH — Spring's Jackson message converters (@RestController /
+        // @ResponseBody / @RequestBody) and the actuator endpoints call jackson
+        // on the request path with no first-party `import`. Declaring such a dep
+        // an orphan `unreachable` is a false negative; floor it at `module`
+        // (honest: used-but-unproven) instead. Conservative: fires only for deps
+        // in the FRAMEWORK_MEDIATED table (jackson) when the project's dispatch
+        // mechanism is present. Requires recognized maven signals — a non-maven
+        // / unrecognized project yields mediated=false → unchanged behaviour.
+        const frameworkMediatedResult = featureSignals
+          ? evaluateFrameworkMediatedUsage({ depName, signals: featureSignals })
+          : { mediated: false as const };
+        const frameworkMediated = frameworkMediatedResult.mediated;
         // Ecosystems where source code MUST `use`/`import` a package to
         // exercise it. For these, files_importing_count === 0 is strong
         // negative evidence even on a directly-declared dep (composer.json /
@@ -1394,6 +1748,7 @@ export async function updateReachabilityLevels(
           !isFrameworkEmbeddedRuntime(depName) &&
           !isFrameworkRuntimePackage(depName) &&
           !callgraphReachedThisDep &&
+          !frameworkMediated &&
           !clientSpaBundledProdDep;
         // R1 — would-be-silenced transitive whose parent version is itself
         // >= `module` reachable (per the gated dependency_version_edges
@@ -1437,12 +1792,604 @@ export async function updateReachabilityLevels(
             verdict: 'callgraph_reached_transitive',
             callgraph_evidence: { dep_name: depName },
           };
+
+          // FEATURE-PRECONDITION GATE (reachability noise reduction).
+          // The callgraph proves the framework runtime is reached, but a CVE in
+          // a framework FEATURE the app never enables (WebSocket, AJP, HTTP/2,
+          // WebDAV, Digest auth, a TLS cipher connector, a Spring Security
+          // filter chain, script-template views, a Realm, CloudFoundry) is
+          // provably unreachable. Demote module→unreachable ONLY when the CVE's
+          // required feature is PROVABLY ABSENT from the scanned project — the
+          // decision function is conservative and fails safe (an unrecognized
+          // project, an ambiguous signal, or a summary that names no gated
+          // feature all leave the finding at `module`). We only ever demote
+          // here, never promote.
+          if (featureSignals) {
+            const demotion = evaluateFeaturePreconditionDemotion({
+              depName,
+              summary: (pdv.summary ?? null) as string | null,
+              signals: featureSignals,
+            });
+            if (demotion.demote) {
+              level = 'unreachable';
+              details = {
+                reason: `feature_precondition_absent: ${demotion.feature}`,
+                scope: 'feature_precondition_absent',
+                verdict: 'feature_precondition_absent',
+                feature: demotion.feature,
+                matched_summary_pattern: demotion.matchedPattern ?? null,
+                demoted_from: 'callgraph_reached_transitive',
+              };
+            }
+          }
+        } else if (frameworkMediated) {
+          // Reached purely via framework DISPATCH (Jackson message converters /
+          // actuator endpoints) — no first-party import, but genuinely on the
+          // request path at runtime. Honest floor at `module`; the always-on
+          // promotion post-pass below may then lift a *specific* always-on CVE
+          // (jackson-core's blocking parser on an exposed actuator JSON-body
+          // endpoint) to a visible tier, while the sibling jackson CVEs stay
+          // hidden here at `module`.
+          level = 'module';
+          details = {
+            reason: `framework-mediated usage: ${frameworkMediatedResult.id ?? 'framework dispatch'}`,
+            scope: 'framework_mediated',
+            verdict: 'framework_mediated',
+            ...(frameworkMediatedResult.id ? { framework_mediated_by: frameworkMediatedResult.id } : {}),
+          };
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a
           // framework starter) floor at `module` — we know they run, we just
           // can't pin the vulnerable function to a call path.
           level = 'module';
+        }
+      }
+
+      // PHP/SYMFONY FEATURE-PRECONDITION + DEV-ONLY DEMOTION (composer mirror of
+      // the Java feature-precondition gate). Applies to ANY composer `module`
+      // finding regardless of which branch above produced it (the coarse PHP
+      // callgraph stamps nearly everything `callgraph_reached_transitive`, and
+      // it overrides the SBOM dev-scope for transitive dev deps). Demote-only,
+      // and runs BEFORE the always-on promotion post-pass so a demoted finding's
+      // `unreachable` is respected by the `level === 'module'` promotion guard.
+      // Fail-safe: unrecognized / non-Symfony signals refuse every demotion —
+      // EXCEPT the dev-only lever below, which is composer-generic (keys on the
+      // parsed composer.lock, not Symfony recognition) so it also fires on
+      // Laravel / plain-PHP apps.
+      if (symfonySignals && level === 'module') {
+        // 1) Dev-only package (composer.lock `packages-dev`, not in `packages`) —
+        //    never shipped to prod, so its CVE is genuinely unreachable. The
+        //    strongest lever; needs no summary match. Framework-INDEPENDENT: the
+        //    composer.lock packages-dev set is authoritative for any composer app,
+        //    so this demotes a Laravel app's phpunit/debugbar/psysh/dev-scoped
+        //    symfony/yaml too (the Symfony feature-precondition branch below stays
+        //    recognition-gated).
+        const devOnly = evaluateComposerDevOnlyDemotion({
+          packageName: composerPackage,
+          signals: symfonySignals,
+        });
+        if (devOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${devOnly.package} is composer.lock packages-dev (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: devOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the Symfony feature the CVE requires (Twig
+          //    sandbox, untrusted-YAML parse, x509 firewall, `unanimous`
+          //    strategy, HttpCache, PDO cache adapter, symfony/mailer) is
+          //    provably absent from the scanned project.
+          const phpDemotion = evaluateSymfonyFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: symfonySignals,
+          });
+          if (phpDemotion.demote) {
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${phpDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: phpDemotion.feature,
+              matched_summary_pattern: phpDemotion.matchedPattern ?? null,
+              demoted_from: 'callgraph_reached_transitive',
+            };
+          }
+        }
+      }
+
+      // LARAVEL FEATURE-PRECONDITION DEMOTION (a SECOND composer model beside the
+      // Symfony block above — a Laravel app carries no symfony/framework-bundle, so
+      // the Symfony model's `recognized` is false there). Demotes a laravel/framework
+      // `module` finding to `unreachable` when its CVE's required feature is provably
+      // ABSENT (no signed-URL API anywhere → GHSA-crmm unreachable, as on koel). The
+      // composer-generic dev-only demotion already ran in the Symfony block. Runs
+      // BEFORE the always-on promotion post-pass so a demoted finding's `unreachable`
+      // is respected by the `level === 'module'` promotion guard. Fail-safe:
+      // unrecognized / non-Laravel signals refuse every demotion.
+      if (laravelSignals && level === 'module') {
+        const laravelDemotion = evaluateLaravelFeaturePreconditionDemotion({
+          depName,
+          summary: (pdv.summary ?? null) as string | null,
+          signals: laravelSignals,
+        });
+        if (laravelDemotion.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `feature_precondition_absent: ${laravelDemotion.feature}`,
+            scope: 'feature_precondition_absent',
+            verdict: 'feature_precondition_absent',
+            feature: laravelDemotion.feature,
+            matched_summary_pattern: laravelDemotion.matchedPattern ?? null,
+            demoted_from: 'callgraph_reached_transitive',
+          };
+        }
+      }
+
+      // RUBY/RAILS FEATURE-PRECONDITION + DEV-ONLY DEMOTION (gem mirror of the
+      // Java/PHP feature-precondition gates). Applies to ANY gem `module` finding
+      // regardless of which branch produced it (the coarse Ruby callgraph stamps
+      // nearly everything `callgraph_reached_transitive` / `transitive_of_reachable`
+      // and overrides the SBOM dev-scope for transitive dev gems). Demote-only,
+      // and runs BEFORE the always-on promotion post-pass so a demoted finding's
+      // `unreachable` is respected by the `level === 'module'` promotion guard.
+      // Fail-safe: unrecognized / non-Rails signals refuse every demotion.
+      if (railsSignals && level === 'module') {
+        // 1) Dev-only gem (Gemfile `:development`/`:test`/`:assets` group, direct
+        //    declaration only) — never loaded in production, so its CVE is
+        //    genuinely unreachable. The strongest lever; needs no summary match.
+        const railsDevOnly = evaluateRailsDevOnlyDemotion({
+          depName,
+          signals: railsSignals,
+        });
+        if (railsDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${railsDevOnly.gem} is a Gemfile development/test/assets group gem (not loaded in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: railsDevOnly.gem,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the Rails gem feature the CVE requires
+          //    (Rack::Static/Directory/CommonLogger, Nokogiri XSLT/Schema/JRuby,
+          //    Oj streaming parser, ActionPack dev pages, rails-ujs, the S3
+          //    encryption client, a Windows-only bug) is provably absent.
+          const railsDemotion = evaluateRailsFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: railsSignals,
+          });
+          if (railsDemotion.demote) {
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${railsDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: railsDemotion.feature,
+              matched_summary_pattern: railsDemotion.matchedPattern ?? null,
+              demoted_from: 'callgraph_reached_transitive',
+            };
+          }
+        }
+      }
+
+      // GO SUBPACKAGE-IMPORT DEMOTION (the Go-module mirror of the Rails/Symfony
+      // feature-precondition gate, but PROVABLE via the import graph rather than a
+      // summary heuristic). Applies to ANY `golang` module finding: the classifier
+      // floors every imported Go module at `module` (golang is not an
+      // EXPLICIT_IMPORT_ECOSYSTEM — its tree-sitter resolution is per-module, so
+      // importing ANY subpackage keeps the whole module at `module`). Here we split
+      // that using the exact subpackage import set: a CVE whose affected subpackage
+      // (x/crypto/ssh, x/net/html) is provably not imported is genuinely
+      // `unreachable`. Demote-only, runs BEFORE the promotion post-pass so a demoted
+      // finding's `unreachable` is respected by the `level === 'module'` guard.
+      // Fail-safe: unrecognized / truncated / non-Go signals refuse every demotion.
+      if (goSignals && level === 'module') {
+        const goDemotion = evaluateGoSubpackageDemotion({
+          depName,
+          summary: (pdv.summary ?? null) as string | null,
+          signals: goSignals,
+        });
+        if (goDemotion.demote) {
+          // Arc 2: prod_path demotions (requiresTransitiveProof rules) carry
+          // their own honest verdict/reason; legacy first_party demotions stay
+          // byte-stable (verdict strings are consumer contracts).
+          const prodPath = goDemotion.proofStandard === 'prod_path';
+          level = 'unreachable';
+          details = {
+            reason: prodPath
+              ? `subpackage_not_on_prod_path: ${goDemotion.subpackage} is not imported by any first-party source file nor compiled in by any package on the production dependency path`
+              : `subpackage_not_imported: ${goDemotion.subpackage} is not imported by any first-party source file`,
+            scope: 'feature_precondition_absent',
+            verdict: prodPath ? 'go_subpackage_not_on_prod_path' : 'go_subpackage_not_imported',
+            feature: goDemotion.subpackage,
+            matched_summary_pattern: goDemotion.matchedPattern ?? null,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        }
+      }
+
+      // PYTHON/DJANGO FEATURE-PRECONDITION + DEV-ONLY DEMOTION (pypi mirror of
+      // the Rails/Symfony gates, plus a Go-style SUBMODULE import gate: pypi IS
+      // an explicit-import ecosystem, so what survives at `module` is the
+      // imported-but-unproven middle — and Python imports are per-PACKAGE while
+      // CVEs are scoped to SUBMODULES (`from PIL import Image` keeps ALL of
+      // pillow at `module`, including the ImageFont/PdfParser CVEs the app
+      // provably never loads). Demote-only, runs BEFORE the promotion post-pass
+      // so a demoted finding's `unreachable` is respected by the
+      // `level === 'module'` guard. Fail-safe: unrecognized / truncated /
+      // non-Django signals refuse every demotion.
+      // Runs on `module` AND `function`: a feature-precondition whose vulnerable
+      // submodule/API is IMPORT-GATED-absent is unreachable regardless of the
+      // package's own tier (the usage classifier stamps `function` when the
+      // package's TOP-LEVEL API is called — `tqdm(...)`/`FileLock(...)` — even
+      // though the vulnerable submodule `tqdm.cli`/`SoftFileLock` is never
+      // touched). The dev-only lever stays `module`-only (higher-risk on a
+      // function-reached dep); the feature-precondition applies on `function`
+      // ONLY for functionSafe rows.
+      if (djangoSignals && (level === 'module' || level === 'function')) {
+        // 1) Dev-only package (poetry dev groups / Pipfile dev-packages /
+        //    requirements-dev.txt, prod scope wins) — never installed in
+        //    production. Needed despite the explicit-import heuristic: a dev
+        //    tool's own test files import it, so files_importing_count > 0.
+        //    `module`-only: demoting a `function`-stamped dev dep is rarer + riskier.
+        const djangoDevOnly =
+          level === 'module'
+            ? evaluateDjangoDevOnlyDemotion({ depName, signals: djangoSignals })
+            : { demote: false as const };
+        if (djangoDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${djangoDevOnly.package} is a dev-scope manifest dependency (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: djangoDevOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the feature the CVE requires (a pillow /
+          //    cryptography submodule, django.contrib.humanize, Scrapy for the
+          //    brotli path, the h11 parser, setuptools' PackageIndex, the tqdm
+          //    CLI, the filelock SoftFileLock) is provably absent. Applies at
+          //    `module` always; at `function` ONLY when every matched row is
+          //    functionSafe (import-gated on the specific vulnerable submodule/API).
+          const djangoDemotion = evaluateDjangoFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: djangoSignals,
+          });
+          if (djangoDemotion.demote && (level === 'module' || djangoDemotion.functionSafe)) {
+            const priorVerdict =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : level;
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${djangoDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: djangoDemotion.feature,
+              matched_summary_pattern: djangoDemotion.matchedPattern ?? null,
+              demoted_from: priorVerdict,
+            };
+          }
+        }
+      }
+
+      // Flask/FastAPI (pypi, 7th model) — same two-lever shape as the Django
+      // block: dev-only demotion (module-only) then feature-precondition demotion
+      // (module always; function only for functionSafe import-gated rows, e.g. a
+      // multipart-parser CVE on a pure-JSON FastAPI API that has no form endpoints).
+      if (flaskSignals && (level === 'module' || level === 'function')) {
+        const flaskDevOnly =
+          level === 'module'
+            ? evaluateFlaskDevOnlyDemotion({ depName, signals: flaskSignals })
+            : { demote: false as const };
+        if (flaskDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${flaskDevOnly.package} is a dev-scope manifest dependency (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: flaskDevOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          const flaskDemotion = evaluateFlaskFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            osvIds: candidateOsvIds,
+            signals: flaskSignals,
+          });
+          if (flaskDemotion.demote && (level === 'module' || flaskDemotion.functionSafe)) {
+            const priorVerdict =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : level;
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${flaskDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: flaskDemotion.feature,
+              matched_summary_pattern: flaskDemotion.matchedPattern ?? null,
+              demoted_from: priorVerdict,
+            };
+          }
+        }
+      }
+
+      // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
+      // recovery — the mirror image of the feature-precondition DEMOTION gate
+      // above). A CVE in framework code that is UNCONDITIONALLY on the request
+      // path of a deployed web app (an embedded servlet-container request
+      // parser / default servlet, Spring MVC's always-registered static-
+      // resource handler) or that executes at every startup (a predictable
+      // temp dir) is genuinely reachable, yet the heuristics above can only
+      // reach `module` (the app never `import`s the servlet container). Promote
+      // such a `module` finding to a visible tier so it isn't silenced.
+      //
+      // COMPOSITION with the demotion gate (critical — the two models must
+      // never fight):
+      //   1. The demotion already ran in the callgraph branch; if it fired the
+      //      finding is at `unreachable`, so the `level === 'module'` guard
+      //      below skips it — feature-gated-absent → unreachable WINS.
+      //   2. For a `module` finding produced by a NON-callgraph branch (e.g. a
+      //      framework-embedded-runtime floor) the demotion never ran, so we
+      //      re-evaluate it here and REFUSE to promote anything it would
+      //      silence. This also handles "feature present → genuinely reachable"
+      //      correctly (demotion returns false → promotion proceeds).
+      // Gated on the deployed-web-app signal — >= 1 HTTP-route entry point, OR the
+      // Go deployed-HTTP-server signal (a caddy-shaped server routes via its own
+      // module system, so the framework detectors emit 0 routes), OR the Django
+      // deployed-app signal (a GraphQL-only Django app may emit 0 detected
+      // routes). A library/CLI repo (no routes, no server) never gets a promotion.
+      // The `orphan_transitive_unreachable` floor is a HEURISTIC ("direct dep
+      // declared in the manifest but imported by no first-party file"), NOT a
+      // taint proof — and it is wrong for a dep reached TRANSITIVELY through a
+      // used consumer (e.g. idna via requests / email-validator: idna is pinned
+      // directly yet only ever called by those libraries). A feature-gated
+      // always-on framework promotion whose `requires` precondition holds proves
+      // that transitive reach, so let such a promotion override the orphan floor.
+      // Only the orphan HEURISTIC is overridable — a taint-proven unreachable is not.
+      const isOrphanFloor =
+        level === 'unreachable' &&
+        !!details &&
+        typeof details === 'object' &&
+        details.verdict === 'orphan_transitive_unreachable';
+      if (
+        (level === 'module' || isOrphanFloor) &&
+        (hasHttpRouteEntryPoint || goServerReachable || djangoDeployed || flaskDeployed)
+      ) {
+        const summaryStr = (pdv.summary ?? null) as string | null;
+        const wouldDemote =
+          (featureSignals
+            ? evaluateFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: featureSignals,
+              }).demote
+            : false) ||
+          // The gem models' demotions already ran above; this backstop refuses to
+          // promote a gem finding whose Rails feature is provably absent or whose
+          // gem is dev-only, in case it reached here via a non-callgraph branch.
+          (railsSignals
+            ? evaluateRailsDevOnlyDemotion({ depName, signals: railsSignals }).demote ||
+              evaluateRailsFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: railsSignals,
+              }).demote
+            : false) ||
+          // Go backstop: refuse to promote a finding whose affected subpackage is
+          // provably not imported (its demotion already ran above).
+          (goSignals
+            ? evaluateGoSubpackageDemotion({
+                depName,
+                summary: summaryStr,
+                signals: goSignals,
+              }).demote
+            : false) ||
+          // Django backstop: refuse to promote a pypi finding whose package is
+          // dev-only or whose required feature is provably absent.
+          (djangoSignals
+            ? evaluateDjangoDevOnlyDemotion({ depName, signals: djangoSignals }).demote ||
+              evaluateDjangoFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: djangoSignals,
+              }).demote
+            : false) ||
+          // Laravel backstop: refuse to promote a laravel/framework finding whose
+          // required feature is provably absent (its demotion already ran above).
+          (laravelSignals
+            ? evaluateLaravelFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: laravelSignals,
+              }).demote
+            : false) ||
+          // Flask/FastAPI backstop: refuse to promote a pypi finding whose package
+          // is dev-only or whose required feature is provably absent (its demotion
+          // already ran above; this catches non-callgraph branches).
+          (flaskSignals
+            ? evaluateFlaskDevOnlyDemotion({ depName, signals: flaskSignals }).demote ||
+              evaluateFlaskFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                osvIds: candidateOsvIds,
+                signals: flaskSignals,
+              }).demote
+            : false);
+        if (!wouldDemote) {
+          // Try the Java/Spring always-on model first, then PHP/Symfony, then
+          // Ruby/Rails. (Each language's demotion post-pass already ran above, so
+          // a finding those would silence is already `unreachable` and never
+          // reaches here — the `level === 'module'` guard skips it.)
+          const promotion = evaluateAlwaysOnRuntimePromotion({
+            depName,
+            summary: summaryStr,
+            hasHttpRouteEntryPoint,
+            signals: featureSignals,
+            osvIds: candidateOsvIds,
+          });
+          const phpPromotion =
+            !promotion.promote && symfonySignals
+              ? evaluateSymfonyAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: symfonySignals,
+                })
+              : { promote: false as const };
+          const railsPromotion =
+            !promotion.promote && !phpPromotion.promote && railsSignals
+              ? evaluateRailsAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: railsSignals,
+                  osvIds: candidateOsvIds,
+                })
+              : { promote: false as const };
+          // Go always-on model (4th) — the x/net/http2 server stack on a deployed
+          // Go HTTP server. Gated on its OWN `isDeployedHttpServer` signal (carried
+          // inside goSignals), not `hasHttpRouteEntryPoint`, which is 0 for a
+          // module-routed server.
+          const goPromotion =
+            !promotion.promote && !phpPromotion.promote && !railsPromotion.promote && goSignals
+              ? evaluateGoAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  signals: goSignals,
+                })
+              : { promote: false as const };
+          // Django always-on model (5th) — the always-on Django request path +
+          // the upload-gated pillow WebP decoder. Passes the finding's full id
+          // set (osv_id + aliases): PYSEC-2023-175's summary is the literal
+          // string "Summary", so its row matches by advisory ID.
+          const djangoPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            djangoSignals
+              ? evaluateDjangoAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  osvIds: candidateOsvIds,
+                  deployedWebApp: hasHttpRouteEntryPoint || djangoDeployed,
+                  signals: djangoSignals,
+                })
+              : { promote: false as const };
+          // Laravel always-on model (6th) — feature-gated laravel/framework
+          // promotions: signed-URL path confusion (when the app USES signed URLs,
+          // as monica does), file-validation bypass (when it validates uploads).
+          const laravelPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            !djangoPromotion.promote &&
+            laravelSignals
+              ? evaluateLaravelAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: laravelSignals,
+                })
+              : { promote: false as const };
+          // Flask/FastAPI always-on model (7th) — feature-gated pypi promotions:
+          // Werkzeug cookie/form parser (always-on / when the app has forms),
+          // Starlette/python-multipart form parser (forms), h11 request parser
+          // (uvicorn without httptools), Pydantic email-validator ReDoS + idna
+          // encode (when the app validates request emails), PyJWT crit-header
+          // decode (when the app decodes attacker JWTs).
+          const flaskPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            !djangoPromotion.promote &&
+            !laravelPromotion.promote &&
+            flaskSignals
+              ? evaluateFlaskAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  osvIds: candidateOsvIds,
+                  deployedWebApp: hasHttpRouteEntryPoint || flaskDeployed,
+                  signals: flaskSignals,
+                })
+              : { promote: false as const };
+          const chosen = promotion.promote
+            ? promotion
+            : phpPromotion.promote
+              ? phpPromotion
+              : railsPromotion.promote
+                ? railsPromotion
+                : goPromotion.promote
+                  ? goPromotion
+                  : djangoPromotion.promote
+                    ? djangoPromotion
+                    : laravelPromotion.promote
+                      ? laravelPromotion
+                      : flaskPromotion.promote
+                        ? flaskPromotion
+                        : null;
+          // Orphan-floor scoping: a finding that entered the promotion gate via the
+          // `orphan_transitive_unreachable` HEURISTIC (isOrphanFloor) may ONLY be
+          // promoted by a rule that PROVABLY implies the orphan dep is transitively
+          // reached — i.e. one flagged `overridesOrphanFloor` (currently only the
+          // Flask idna-encode rule, where email-validator→idna.encode is a fixed
+          // transitive consumer). Any other match leaves it `unreachable`: a
+          // workspace signal satisfied by a DIFFERENT library (e.g. python-jose
+          // setting usesJwtAuth) must never surface an unused orphan pin (e.g. a
+          // leftover PyJWT) as a false positive.
+          const chosenOverridesOrphan =
+            !!chosen && (chosen as { overridesOrphanFloor?: boolean }).overridesOrphanFloor === true;
+          if (
+            chosen && chosen.promote && chosen.promoteTo &&
+            (!isOrphanFloor || chosenOverridesOrphan)
+          ) {
+            // Record the pre-promotion verdict honestly: the callgraph branch
+            // stamps `callgraph_reached_transitive`; the embedded-runtime /
+            // direct floor leaves details null → 'module'.
+            const promotedFrom =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module';
+            level = chosen.promoteTo;
+            details = {
+              reason: `always_on_framework_runtime: ${chosen.sink}`,
+              scope: 'always_on_framework_runtime',
+              verdict: 'always_on_framework_runtime',
+              sink: chosen.sink,
+              matched_summary_pattern: chosen.matchedPattern ?? null,
+              promoted_from: promotedFrom,
+              ...(chosen.threatTag ? { threat_tag: chosen.threatTag } : {}),
+            };
+          }
         }
       }
       }
@@ -1487,6 +2434,12 @@ export async function updateReachabilityLevels(
         used_transitives_count: options.usedTransitives?.size ?? null,
         callgraph_ran: (options.usedTransitives?.size ?? 0) > 0,
         is_client_spa: !!options.isClientSpaProject,
+        // Arc 2: lets the M2 cross-run differ distinguish "gate refused because
+        // the oracle was absent" from "the oracle answered". Counts only — no
+        // package lists, no URLs.
+        transitive_import_status: options.transitiveImports?.status ?? null,
+        transitive_extracted_count: options.transitiveImports?.extractedPackages.size ?? null,
+        transitive_failed_count: options.transitiveImports?.failedPackages.length ?? null,
       },
     });
 
@@ -1498,7 +2451,7 @@ export async function updateReachabilityLevels(
   for (let i = 0; i < pdvUpdates.length; i += 100) {
     const chunk = pdvUpdates.slice(i, i + 100);
     const { error: updateErr } = await supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .upsert(chunk, { onConflict: 'id' });
     if (updateErr) {
       console.error(

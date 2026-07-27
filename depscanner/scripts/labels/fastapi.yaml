@@ -1,0 +1,125 @@
+# fastapi-realworld (nsidnev) — Flask/FastAPI reachability model (Arc 4a) blind triage + adversarial verify 2026-07-03.
+cves:
+  - id: CVE-2026-32274
+    dep: black
+    expected_reachability: unreachable
+  - id: CVE-2024-21503
+    dep: black
+    expected_reachability: unreachable
+  - id: CVE-2024-39689
+    dep: certifi
+    expected_reachability: unreachable
+  - id: CVE-2022-23491
+    dep: certifi
+    expected_reachability: unreachable
+  - id: CVE-2023-37920
+    dep: certifi
+    expected_reachability: unreachable
+  - id: CVE-2023-29483
+    dep: dnspython
+    expected_reachability: module
+  - id: CVE-2024-24762
+    dep: fastapi
+    expected_reachability: module
+  - id: CVE-2024-22190
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2026-44243
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2023-41040
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2022-24439
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2023-40267
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2026-44244
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2023-40590
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2026-42284
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: GHSA-mv93-w799-cj2w
+    dep: gitpython
+    expected_reachability: unreachable
+  - id: CVE-2025-43859
+    dep: h11
+    expected_reachability: data_flow
+  - id: CVE-2026-45409
+    dep: idna
+    expected_reachability: data_flow
+  - id: CVE-2024-3651
+    dep: idna
+    expected_reachability: data_flow
+  - id: CVE-2026-44307
+    dep: mako
+    expected_reachability: module
+  - id: CVE-2026-41205
+    dep: mako
+    expected_reachability: module
+  - id: CVE-2022-40023
+    dep: mako
+    expected_reachability: module
+  - id: CVE-2024-3772
+    dep: pydantic
+    expected_reachability: data_flow
+  - id: CVE-2026-4539
+    dep: pygments
+    expected_reachability: unreachable
+  - id: CVE-2022-40896
+    dep: pygments
+    expected_reachability: unreachable
+  - id: CVE-2026-32597
+    dep: pyjwt
+    expected_reachability: data_flow
+  - id: CVE-2026-48522
+    dep: pyjwt
+    expected_reachability: module
+  - id: CVE-2026-48524
+    dep: pyjwt
+    expected_reachability: module
+  - id: CVE-2026-48526
+    dep: pyjwt
+    expected_reachability: module
+  - id: CVE-2025-45768
+    dep: pyjwt
+    expected_reachability: module
+  - id: CVE-2025-71176
+    dep: pytest
+    expected_reachability: unreachable
+  - id: CVE-2026-28684
+    dep: python-dotenv
+    expected_reachability: module
+  - id: CVE-2025-54121
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2023-30798
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2026-54283
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2026-48710
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2024-47874
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2026-54282
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2023-29159
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2026-48818
+    dep: starlette
+    expected_reachability: module
+  - id: CVE-2026-48817
+    dep: starlette
+    expected_reachability: module

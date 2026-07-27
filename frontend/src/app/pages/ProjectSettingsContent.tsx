@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe } from 'lucide-react';
+import { Settings, Users, X, Search, Crown, UserPlus, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import {
   Dialog,
@@ -244,6 +244,10 @@ export interface ProjectSettingsContentProps {
   /** Optimistic transfer: move the project node to its new owner team in the graph
    *  store in place (no refetch) so it relocates instantly. */
   onProjectTransferred?: (newOwnerTeamId: string) => void;
+  /** Optimistic delete: drop the project node from the graph store in place and close
+   *  the sidebar (no refetch / full reload). When provided (embedded in the overview
+   *  sidebar) it's used instead of navigating away to the projects list. */
+  onProjectDeleted?: () => void;
 }
 
 /** Repo name without account prefix: "owner/repo" -> "repo" */
@@ -301,8 +305,74 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
   return `${Math.floor(m / 60)}h`;
 }
 
-const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'scanning']);
+// 'access' parked — see the projectSettingsSections nav comment (tab removed for now).
+const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'scanning']);
 
+/** Full Repository-section loading skeleton — mirrors the real layout: connected-repo
+ *  card + sync-frequency card + recent-activity table (faded downward). Used both while
+ *  the project prefetch is in flight and while the connected-repo status loads. */
+function RepositorySectionSkeleton() {
+  const pulse = 'bg-muted animate-pulse rounded';
+  return (
+    <div className="space-y-8">
+      {/* Connected repo card */}
+      <section className="space-y-4">
+        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+          <div className="flex items-center gap-4 p-5">
+            <div className="h-5 w-5 rounded-sm bg-muted animate-pulse shrink-0" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className={`h-4 w-56 ${pulse}`} />
+              <div className={`h-3 w-32 ${pulse}`} />
+            </div>
+            <div className={`h-8 w-20 ${pulse} shrink-0`} />
+          </div>
+        </div>
+      </section>
+      {/* Sync frequency card */}
+      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+        <div className="p-6 space-y-4">
+          <div className="space-y-1.5">
+            <div className={`h-4 w-32 ${pulse}`} />
+            <div className={`h-3 w-64 ${pulse}`} />
+          </div>
+          <div className={`h-14 w-full ${pulse}`} />
+          <div className="pt-2 space-y-2">
+            <div className={`h-4 w-48 ${pulse}`} />
+            <div className={`h-12 w-full ${pulse}`} />
+            <div className={`h-12 w-full ${pulse}`} />
+          </div>
+        </div>
+        <div className="px-6 py-3 bg-black/20 border-t border-border flex justify-end">
+          <div className={`h-8 w-16 ${pulse}`} />
+        </div>
+      </div>
+      {/* Recent activity table — faded downward like the other table skeletons */}
+      <div
+        className="rounded-lg border border-border bg-background-card overflow-hidden"
+        style={{
+          maskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+        }}
+      >
+        <div className="px-4 py-2.5 border-b border-border bg-background-card-header">
+          <div className={`h-3 w-40 ${pulse}`} />
+        </div>
+        <div className="divide-y divide-border">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="px-4 py-3 flex items-center gap-4">
+              <div className="flex items-center gap-2 flex-[4]">
+                <div className="h-4 w-4 bg-muted rounded shrink-0 animate-pulse" />
+                <div className={`h-4 w-24 ${pulse}`} />
+              </div>
+              <div className="flex-1"><div className={`h-4 w-16 ${pulse}`} /></div>
+              <div className="flex-1 flex justify-end"><div className={`h-4 w-14 ${pulse}`} /></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Renders a tab-specific content skeleton for the project settings loading state. */
 function ProjectSettingsTabSkeleton({ section }: { section: string }) {
@@ -352,26 +422,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
         </div>
       );
     case 'repository':
-      return (
-        <div className="space-y-8">
-          <div>
-            <div className={`h-8 w-40 ${pulse}`} />
-          </div>
-          <div className="space-y-4">
-            <div>
-              <div className={`h-5 w-48 ${pulse} mb-2`} />
-              <div className={`h-3 w-72 ${pulse}`} />
-            </div>
-            <div className="flex items-center gap-4 py-5 px-4 rounded-lg border border-border/60 bg-background-content/50 min-h-[80px]">
-              <div className="h-12 w-12 rounded-lg bg-muted animate-pulse shrink-0" />
-              <div className="flex flex-col gap-2 min-w-0 flex-1">
-                <div className={`h-4 w-48 ${pulse}`} />
-                <div className={`h-3 w-28 ${pulse}`} />
-              </div>
-            </div>
-          </div>
-        </div>
-      );
+      return <RepositorySectionSkeleton />;
     case 'access':
       return (
         <div className="space-y-6">
@@ -469,7 +520,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
-  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred } = props;
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred, onProjectDeleted } = props;
   const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -477,7 +528,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const projectId = project?.id ?? params.projectId ?? '';
   const sectionParam = params.section;
   const [sidebarSection, setSidebarSection] = useState<string>(initialSection ?? 'general');
-  const activeSection = embedInSidebar ? sidebarSection : (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
+  // Validate in both modes so a stale/parked section (e.g. 'access') falls back to General.
+  const activeSection = embedInSidebar
+    ? (VALID_PROJECT_SETTINGS_SECTIONS.has(sidebarSection) ? sidebarSection : 'general')
+    : (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
   /** Match Dependencies / Compliance embed: bleed past org project drawer px-5; same shell as drawer (not lighter bg-background-content). */
   const mainEmbedClass = embedInSidebar
     ? '-mx-5 min-h-[28rem] h-full w-[calc(100%+2.5rem)] max-w-none'
@@ -493,6 +547,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [copiedDeleteName, setCopiedDeleteName] = useState(false);
 
   const canViewSettings = userPermissions?.view_settings === true;
   const canEditSettings = userPermissions?.edit_settings === true;
@@ -541,16 +596,26 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [scanOnCommit, setScanOnCommit] = useState<boolean>(false);
   const [syncFrequency, setSyncFrequency] = useState<string>('daily');
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
+  // 'manual' sync_frequency = scanning disabled: no scheduled scan (the cron only matches
+  // daily/weekly) and the Disable Scanning toggle also forces scan_on_commit off. Gates
+  // the commit/frequency controls and the manual Rescan button.
+  const scanningDisabled = syncFrequency === 'manual';
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(true);
   const [rescanning, setRescanning] = useState(false);
   // Which project's runs we've already loaded — gates the skeleton to the first load only.
   const loadedRunsForProjectRef = useRef<string | null>(null);
-  // Transfer project state
+  // Transfer project state. `teams` (all org teams) + projectTeams.owner_team feed the
+  // transfer dropdown, but they're loaded lazily on first dropdown open (see
+  // ensureTransferTeams) rather than eagerly on mount — the transfer action is rare and
+  // General shouldn't pay for it. transferTeamsLoaded distinguishes "not fetched yet"
+  // (show the clickable select) from "fetched and empty" (show "no other teams").
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [transferTeamsLoaded, setTransferTeamsLoaded] = useState(false);
+  const transferRequestedRef = useRef(false);
 
   // Access section state
   const [projectTeams, setProjectTeams] = useState<ProjectTeamsResponse | null>(null);
@@ -597,24 +662,31 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   }, [project?.name]);
 
-  const loadProjectRepositories = async (integrationId?: string) => {
+  const loadProjectRepositories = async () => {
     if (!organizationId || !projectId) return;
-    const cached = !integrationId ? api.getCachedProjectRepositories(organizationId, projectId) : null;
+    const cached = api.getCachedProjectRepositories(organizationId, projectId);
     try {
       if (!cached) setRepositoriesLoading(true);
-      const targetIntegration = integrationId || undefined;
-      const data = await api.getProjectRepositories(organizationId, projectId, targetIntegration);
-      setConnectedRepository(data.connectedRepository);
-      setRepositories(data.repositories);
+      // Status-only fetch: the Settings Repository tab only shows the CONNECTED repo
+      // (status + sync settings). The full repo LIST comes from provider.listRepositories()
+      // — a slow GitHub/GitLab API call, seconds of latency — and is only needed by the
+      // connect/change flow (Dependencies tab). Skipping it makes this tab near-instant.
+      const data = await api.getProjectRepositoryStatus(organizationId, projectId);
+      const cr = data.connectedRepository as any;
+      setConnectedRepository(data.connectedRepository as any);
+      setRepositories([]);
       setRepositoriesError(null);
-      if (data.connectedRepository?.pull_request_comments_enabled !== undefined) {
-        setPullRequestCommentsEnabled(data.connectedRepository.pull_request_comments_enabled !== false);
+      if (cr?.pull_request_comments_enabled !== undefined) {
+        setPullRequestCommentsEnabled(cr.pull_request_comments_enabled !== false);
       }
-      if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
-        setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
+      if (cr?.auto_fix_vulnerabilities_enabled !== undefined) {
+        setAutoFixVulnerabilitiesEnabled(cr.auto_fix_vulnerabilities_enabled === true);
       }
-      setSyncFrequency((data.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
-      setScanOnCommit((data.connectedRepository as any)?.scan_on_commit === true);
+      {
+        const freq = cr?.sync_frequency;
+        setSyncFrequency(freq === 'weekly' || freq === 'manual' ? freq : 'daily');
+      }
+      setScanOnCommit(cr?.scan_on_commit === true);
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
     } finally {
@@ -634,7 +706,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
           setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
         }
-        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
+        {
+          const freq = (cached.connectedRepository as any)?.sync_frequency;
+          setSyncFrequency(freq === 'weekly' || freq === 'manual' ? freq : 'daily');
+        }
         setScanOnCommit((cached.connectedRepository as any)?.scan_on_commit === true);
       }
       loadProjectRepositories();
@@ -719,56 +794,69 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   }, [activeSection, organizationId, projectId]);
 
   // Load teams for transfer dropdown
-  const loadTeams = async () => {
+  const loadTeams = async (opts?: { skipLoadingState?: boolean }) => {
     if (!organizationId) return;
     try {
-      setLoadingTeams(true);
+      if (!opts?.skipLoadingState) setLoadingTeams(true);
       const teamsData = await api.getTeams(organizationId);
       setTeams(teamsData);
     } catch (error: any) {
       console.error('Failed to load teams:', error);
     } finally {
-      setLoadingTeams(false);
+      if (!opts?.skipLoadingState) setLoadingTeams(false);
     }
   };
 
-  // Load teams when component mounts
-  useEffect(() => {
-    if (organizationId) {
-      loadTeams();
+  // Lazy-load the transfer dropdown's data on FIRST open only — the org teams plus this
+  // project's owner_team (to exclude it as a target). Not fetched on mount, so opening
+  // Settings on General fires zero team calls; the transfer action pays for its own data.
+  const ensureTransferTeams = async () => {
+    if (transferRequestedRef.current) return;
+    transferRequestedRef.current = true;
+    setLoadingTeams(true);
+    try {
+      await Promise.all([
+        teams.length === 0 ? loadTeams({ skipLoadingState: true }) : Promise.resolve(),
+        projectTeams ? Promise.resolve() : loadProjectTeams({ skipMembers: true, skipLoadingState: true }),
+      ]);
+    } finally {
+      setLoadingTeams(false);
+      setTransferTeamsLoaded(true);
     }
-  }, [organizationId]);
+  };
 
   // Track which project we've loaded access data for (skip refetch when returning to tab)
   const accessDataLoadedForRef = useRef<string | null>(null);
 
-  // Clear access state when project or org changes
+  // Reset per-project team/member state when the project changes. This component stays
+  // mounted across project switches in the overview sidebar (hence the projectId-keyed
+  // refs), so lazily-loaded, project-scoped state must be cleared here or it leaks from
+  // the previous project. Org-scoped `teams` is intentionally kept (same across projects
+  // in the org). The Access section and the transfer dropdown re-fetch on demand.
   useEffect(() => {
-    if (!organizationId || !projectId) return;
-    const key = `${organizationId}:${projectId}`;
-    if (accessDataLoadedForRef.current && accessDataLoadedForRef.current !== key) {
-      setProjectTeams(null);
-      setDirectMembers([]);
-      setOrgMembers([]);
-      setTeamMemberIds(new Set());
-      accessDataLoadedForRef.current = null;
-    }
-  }, [organizationId, projectId]);
-
-  // Load project teams on mount for transfer functionality
-  useEffect(() => {
-    if (organizationId && projectId) {
-      loadProjectTeams();
-    }
-  }, [organizationId, projectId]);
+    setProjectTeams(null);
+    setDirectMembers([]);
+    setOrgMembers([]);
+    setTeamMemberIds(new Set());
+    setSelectedTeamId(null);
+    accessDataLoadedForRef.current = null;
+    transferRequestedRef.current = false;
+    setTransferTeamsLoaded(false);
+  }, [projectId]);
 
   // Load project teams and members when access section is active
-  const loadProjectTeams = async (opts?: { skipLoadingState?: boolean }) => {
+  const loadProjectTeams = async (opts?: { skipLoadingState?: boolean; skipMembers?: boolean }) => {
     if (!organizationId || !projectId) return;
     try {
       if (!opts?.skipLoadingState) setLoadingProjectTeams(true);
       const teamsData = await api.getProjectTeams(organizationId, projectId);
       setProjectTeams(teamsData);
+
+      // The per-team member fetch below is an N+1 that ONLY feeds the Access section's
+      // add-member exclusion list. Skip it when the caller just needs projectTeams (the
+      // General transfer dropdown only reads owner_team), so opening Settings on the
+      // default General view doesn't fan out one getTeamMembers call per team with access.
+      if (opts?.skipMembers) return;
 
       // Fetch members of all teams with access to build exclusion list (parallelized)
       const teamIds: string[] = [];
@@ -836,6 +924,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
           loadProjectTeams({ skipLoadingState: true }),
           loadProjectMembers({ skipLoadingState: true }),
           loadOrgMembers(),
+          // Org teams back the "add contributing team" list. No longer loaded on mount
+          // (that was for the transfer dropdown, now lazy), so load it here for Access.
+          teams.length === 0 ? loadTeams({ skipLoadingState: true }) : Promise.resolve(),
         ]);
         accessDataLoadedForRef.current = key;
       } finally {
@@ -1070,11 +1161,15 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       label: 'Repository',
       icon: <GitBranch className="h-4 w-4 tab-icon-shake" />,
     },
-    {
-      id: 'access',
-      label: 'Access',
-      icon: <Shield className="h-4 w-4 tab-icon-shake" />,
-    },
+    // Access tab parked (2026-07-01) — project team/member management isn't a priority
+    // right now. The `activeSection === 'access'` render block + its data loaders below are
+    // left intact; to restore, re-add this nav entry and 'access' to
+    // VALID_PROJECT_SETTINGS_SECTIONS (and re-import Shield).
+    // {
+    //   id: 'access',
+    //   label: 'Access',
+    //   icon: <Shield className="h-4 w-4 tab-icon-shake" />,
+    // },
     {
       id: 'scanning',
       label: 'DAST',
@@ -1119,7 +1214,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
           >
             {/* Sidebar skeleton */}
-            <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-6' : 'w-64')}>
+            <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-1' : 'w-64')}>
               <div className={cn(!embedInSidebar && 'sticky top-24 pt-8 bg-background-content z-10')}>
                 <nav className="space-y-1">
                   {[1, 2, 3, 4, 5].map((i) => (
@@ -1169,7 +1264,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         title: 'Success',
         description: 'Project deleted',
       });
-      navigate(`/organizations/${organizationId}/projects`);
+      // Embedded in the overview sidebar: drop the node from the graph in place and close
+      // the sidebar (no full reload). Standalone page: fall back to navigating to the list.
+      if (onProjectDeleted) {
+        onProjectDeleted();
+      } else {
+        navigate(`/organizations/${organizationId}/projects`);
+      }
     } catch (error: any) {
       toast({
         title: 'Error',
@@ -1413,8 +1514,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             embedInSidebar ? 'gap-6 pr-12' : 'gap-8'
           )}
         >
-          {/* Sidebar — embed: match team settings drawer (w-48, pt-6); full page: sticky + w-64 */}
-          <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-6' : 'w-64')}>
+          {/* Sidebar — embed: w-48 with a small pt so the nav sits near the top (no dead space
+              above General/Repository/Access/DAST); full page: sticky + w-64 */}
+          <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-1' : 'w-64')}>
             <div className={cn(!embedInSidebar && 'sticky top-24 pt-8 bg-background-content z-10')}>
               <nav className="space-y-1">
                 {projectSettingsSections.map((section) => (
@@ -1486,26 +1588,24 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     <p className="text-sm text-foreground-secondary mb-4">
                       Transfer this project to another team within your organization.
                     </p>
-                    {transferableTeams.length > 0 || loadingTeams ? (
+                    {/* Show the clickable select until we've actually fetched the teams
+                        (opening it lazy-loads them via onOpen); only after a load returns
+                        empty do we show the "no other teams" message. */}
+                    {!transferTeamsLoaded || transferableTeams.length > 0 ? (
                       <div className="space-y-4">
                         <div className="space-y-2">
                           <label className="text-sm font-medium text-foreground">New owner team</label>
-                          {loadingTeams ? (
-                            <div className="max-w-md w-full px-3 py-2.5 bg-background-content border border-border rounded-lg flex items-center gap-2">
-                              <div className="h-5 w-5 rounded bg-muted animate-pulse flex-shrink-0" />
-                              <div className="h-4 w-36 bg-muted rounded animate-pulse" />
-                            </div>
-                          ) : (
-                            <div className="max-w-md">
-                              <ProjectTeamSelect
-                                value={selectedTeamId}
-                                onChange={setSelectedTeamId}
-                                teams={transferableTeams}
-                                placeholder="Select a team"
-                                className="bg-background-card border border-border rounded-lg text-sm text-foreground transition-colors"
-                              />
-                            </div>
-                          )}
+                          <div className="max-w-md">
+                            <ProjectTeamSelect
+                              value={selectedTeamId}
+                              onChange={setSelectedTeamId}
+                              teams={transferableTeams}
+                              loading={loadingTeams}
+                              onOpen={ensureTransferTeams}
+                              placeholder="Select a team"
+                              className="bg-background-card border border-border rounded-lg text-sm text-foreground transition-colors"
+                            />
+                          </div>
                         </div>
                       </div>
                     ) : (
@@ -1515,7 +1615,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       </div>
                     )}
                   </div>
-                  {transferableTeams.length > 0 && (
+                  {/* Footer mirrors the body's select branch — always present in the
+                      normal path (Transfer button stays disabled until a team is picked),
+                      hidden only once a load confirms there are no other teams. */}
+                  {(!transferTeamsLoaded || transferableTeams.length > 0) && (
                     <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                       <Button
                         onClick={handleTransferProject}
@@ -1561,7 +1664,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     {showDeleteConfirm && project && (
                       <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
                         <p className="text-sm text-foreground">
-                          To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{project.name}</strong> below:
+                          To confirm deletion, type{' '}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(project.name);
+                              setCopiedDeleteName(true);
+                              setTimeout(() => setCopiedDeleteName(false), 2000);
+                            }}
+                            className="inline-flex items-center gap-1.5 align-middle text-destructive font-mono bg-destructive/10 hover:bg-destructive/20 px-1.5 py-0.5 rounded transition-colors"
+                            aria-label={copiedDeleteName ? 'Copied' : 'Copy project name'}
+                            title={copiedDeleteName ? 'Copied' : 'Copy project name'}
+                          >
+                            {copiedDeleteName ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                            {project.name}
+                          </button>{' '}
+                          below:
                         </p>
                         <input
                           type="text"
@@ -1604,6 +1722,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
 
             {activeSection === 'repository' && (
+              repositoriesLoading && !connectedRepository ? (
+                <RepositorySectionSkeleton />
+              ) : (
               <div className="space-y-8">
                 {/* Disconnected repository banner */}
                 {isRepoDisconnected && disconnectedBannerMessage && (
@@ -1615,15 +1736,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
                 {/* Connected Git Repository card */}
                 <section className="space-y-4">
-                  {repositoriesLoading ? (
-                    <div className="flex items-center gap-4 py-5 px-4 rounded-lg border border-border/60 bg-background-content/50 min-h-[80px]">
-                      <div className="h-12 w-12 rounded-lg bg-muted/60 animate-pulse shrink-0" />
-                      <div className="flex flex-col gap-2 min-w-0 flex-1">
-                        <div className="h-4 w-48 bg-muted/60 rounded animate-pulse" />
-                        <div className="h-3 w-28 bg-muted/60 rounded animate-pulse" />
-                      </div>
-                    </div>
-                  ) : repositoriesError && (repositoriesError.includes('integration') || repositoriesError.includes('GitHub App') || repositoriesError.includes('No source')) ? (
+                  {repositoriesError && (repositoriesError.includes('integration') || repositoriesError.includes('GitHub App') || repositoriesError.includes('No source')) ? (
                     <div className="flex flex-wrap gap-2 justify-center">
                       <Button
                         variant="outline"
@@ -1669,17 +1782,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           <div className="text-base font-semibold text-foreground truncate font-mono">
                             {connectedRepository.repo_full_name}
                           </div>
-                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5 font-mono">
-                            <Folder className="h-3.5 w-3.5 shrink-0" />
-                            {connectedRepository.package_json_path
-                              ? `/${connectedRepository.package_json_path.replace(/^\/+/, '')}`
-                              : 'Repository root'}
-                          </div>
+                          {(() => {
+                            // Show the manifest sub-path as ./<path>; hide the line entirely
+                            // when it's the repo root (no folder icon, no "Repository root").
+                            const rel = connectedRepository.package_json_path?.replace(/^\/+/, '') ?? '';
+                            if (!rel || rel === 'package.json') return null;
+                            return (
+                              <div className="text-xs text-foreground-secondary mt-0.5 font-mono truncate">
+                                ./{rel}
+                              </div>
+                            );
+                          })()}
                         </div>
                         <Button
                           variant="outline"
                           onClick={handleTriggerRescan}
-                          disabled={rescanning || !canEditSettings || isRepoDisconnected || isExtractionOngoing(connectedRepository?.status ?? '')}
+                          disabled={rescanning || !canEditSettings || isRepoDisconnected || isExtractionOngoing(connectedRepository?.status ?? '') || scanningDisabled}
                           className="relative shrink-0 !h-8 !px-3 !rounded-lg"
                         >
                           <span className={rescanning ? 'invisible' : undefined}>Rescan</span>
@@ -1713,7 +1831,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       <div className="p-6">
                         <h3 className="text-base font-semibold text-foreground mb-1">Sync Frequency</h3>
                         <p className="text-sm text-foreground-secondary mb-4">
-                          When Deptex re-extracts dependencies from this repository.
+                          When Deptex re-scans this repository.
                         </p>
                         {/* Part 1 — scan on every commit (event-driven, real-time); a single toggleable card styled like the floor options */}
                         <button
@@ -1721,12 +1839,14 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           role="checkbox"
                           aria-checked={scanOnCommit}
                           aria-label="Scan on every commit"
+                          disabled={scanningDisabled}
                           onClick={() => setScanOnCommit((v) => !v)}
                           className={cn(
                             'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
                             scanOnCommit
                               ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                              : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                              : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30',
+                            scanningDisabled && 'opacity-50 cursor-not-allowed'
                           )}
                         >
                           <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', scanOnCommit ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
@@ -1738,12 +1858,12 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
                         {/* Part 2 — periodic floor (always runs, independent of the commit toggle) */}
                         <div className="mt-6">
-                          <div className="text-sm font-medium text-foreground mb-1">Re-check for new vulnerabilities</div>
-                          <p className="text-xs text-muted-foreground mb-3">Even without new commits, re-scan dependencies against newly-published advisories at least this often.</p>
-                          <div className="w-full space-y-2" role="radiogroup" aria-label="Re-check frequency">
+                          <div className="text-sm font-medium text-foreground mb-1">Re-scan at least this often</div>
+                          <p className="text-xs text-muted-foreground mb-3">Even without new commits, re-scan dependencies against newly-published advisories on this schedule.</p>
+                          <div className="w-full space-y-2" role="radiogroup" aria-label="Re-scan frequency">
                             {[
-                              { value: 'daily', label: 'Daily', description: 'Re-check once per day.' },
-                              { value: 'weekly', label: 'Weekly', description: 'Re-check once per week.' },
+                              { value: 'daily', label: 'Daily', description: 'Re-scan once per day.' },
+                              { value: 'weekly', label: 'Weekly', description: 'Re-scan once per week.' },
                             ].map((opt) => {
                               const isSelected = syncFrequency === opt.value;
                               return (
@@ -1752,12 +1872,14 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                                   type="button"
                                   role="radio"
                                   aria-checked={isSelected}
+                                  disabled={scanningDisabled}
                                   onClick={() => handleSyncFrequencySelect(opt.value)}
                                   className={cn(
                                     'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
                                     isSelected
                                       ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                      : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                                      : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30',
+                                    scanningDisabled && 'opacity-50 cursor-not-allowed'
                                   )}
                                 >
                                   <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
@@ -1769,6 +1891,39 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               );
                             })}
                           </div>
+                        </div>
+
+                        {/* Part 3 — disable all automated scanning. Turns off commit + scheduled
+                            scans (sync_frequency 'manual' + scan_on_commit off) and disables the
+                            manual Rescan button; re-enabling restores the daily default. */}
+                        <div className="mt-6 pt-6 border-t border-border">
+                          <div className="text-sm font-medium text-foreground mb-1">Disable scanning</div>
+                          <p className="text-xs text-muted-foreground mb-3">Turn off all automated scanning for this repository — no commit or scheduled scans, and manual rescans are disabled.</p>
+                          <button
+                            type="button"
+                            role="checkbox"
+                            aria-checked={scanningDisabled}
+                            aria-label="Disable scanning"
+                            onClick={() => {
+                              if (scanningDisabled) {
+                                setSyncFrequency('daily');
+                              } else {
+                                setSyncFrequency('manual');
+                                setScanOnCommit(false);
+                              }
+                            }}
+                            className={cn(
+                              'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                              scanningDisabled
+                                ? 'bg-destructive/10 border-destructive/40 ring-1 ring-destructive/20'
+                                : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                            )}
+                          >
+                            <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', scanningDisabled ? 'border-destructive bg-destructive' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-foreground">Disable all scanning</div>
+                            </div>
+                          </button>
                         </div>
                       </div>
                       <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
@@ -1800,7 +1955,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 {/* Recent Activity — Vercel-style deployments table */}
                 {connectedRepository && (
                   <div>
-                    <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div
+                      className="rounded-lg border border-border bg-background-card overflow-hidden"
+                      style={extractionRunsLoading ? {
+                        maskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+                      } : undefined}
+                    >
                       <table className="w-full">
                         <thead className="bg-background-card-header border-b border-border">
                           <tr>
@@ -1815,7 +1976,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         </thead>
                         <tbody className="divide-y divide-border">
                           {extractionRunsLoading ? (
-                            [1, 2, 3, 4, 5].map((i) => (
+                            // A few rows fading downward (mask on the wrapper above) like the
+                            // other table skeletons, so it reads as "loading" not a fixed list.
+                            [1, 2, 3].map((i) => (
                               <tr key={i} className="animate-pulse">
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-2">
@@ -1871,6 +2034,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 )}
 
               </div>
+              )
             )}
 
             {/* Select project (monorepo) dialog – shown regardless of active section */}

@@ -226,7 +226,7 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
               className="h-7 w-7 rounded-md flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
               aria-label={copied ? 'Copied' : 'Copy logs'}
             >
-              {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </button>
           </div>
 

@@ -2,7 +2,7 @@ import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
 import {
   HTTP_METHOD_NAMES,
-  classifyFromAuth,
+  decoratorTokenText,
   decoratorsOf,
   detectPyAuthMechanism,
   findClassInstances,
@@ -12,6 +12,7 @@ import {
   textOf,
   walkTree,
 } from '../util/python';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 import { harvestFlaskParams } from '../../param-harvest/flask-harvest';
 
 // Flask route patterns:
@@ -34,8 +35,8 @@ export const flaskDetector: FrameworkDetector = {
     const instances = findClassInstances(tree.rootNode, source, ['Flask', 'Blueprint']);
     if (instances.size === 0) return [];
 
-    const authMechanism = detectPyAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from co-decorator evidence.
+    const authMechanismHint = detectPyAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -46,6 +47,18 @@ export const flaskDetector: FrameworkDetector = {
       const handlerName = funcName ? textOf(funcName, source) : null;
       // Harvest once per view function — shared across all its HTTP methods.
       const requestParams = harvestFlaskParams(node, source);
+
+      // Auth evidence = the view's NON-route co-decorators (@login_required,
+      // @jwt_required(optional=True), @auth.login_required, @requires_auth).
+      // Full decorator text is the token so kwarg vetoes are visible; the shared
+      // name patterns + optional vetoes decide (Sem 4/8).
+      const coDecoratorTokens: string[] = [];
+      for (const dec of decorators) {
+        const parsed = parseDecorator(dec, source);
+        if (parsed.object && instances.has(parsed.object)) continue; // the route decorator itself
+        const token = decoratorTokenText(dec, source);
+        if (token) coDecoratorTokens.push(token);
+      }
 
       for (const dec of decorators) {
         const parsed = parseDecorator(dec, source);
@@ -65,6 +78,12 @@ export const flaskDetector: FrameworkDetector = {
           if (methods.length === 0) methods = ['GET']; // Flask default
         } else continue;
 
+        const result = classifyRoute({
+          authTokens: coDecoratorTokens,
+          routePattern,
+          centralizedOnly: false,
+        });
+
         for (const m of methods) {
           entryPoints.push({
             filePath: file.filePath,
@@ -74,10 +93,13 @@ export const flaskDetector: FrameworkDetector = {
             httpMethod: m,
             routePattern,
             entryPointType: 'http_route',
-            classification,
-            authenticated: !!authMechanism,
-            authMechanism,
-            middlewareChain: null,
+            classification: result.classification,
+            authenticated: result.authenticated,
+            authMechanism: authMechanismHint,
+            middlewareChain: coDecoratorTokens.length ? coDecoratorTokens : null,
+            // Declaration-bound family — span always demotion-eligible (Sem 6).
+            handlerSpan: spanOfNode(node),
+            demotionEligible: true,
             metadata: { instance: parsed.object, decorator: parsed.attr },
             requestParams,
           });

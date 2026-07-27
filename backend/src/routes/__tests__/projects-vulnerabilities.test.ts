@@ -15,7 +15,7 @@ jest.mock('../../lib/supabase', () => ({
 }));
 
 // Phase 1 (findings-tab-perf): the SCA vulnerabilities endpoint replaced a
-// `count(exact, head)` over project_dependency_vulnerabilities — which makes
+// `count(exact, head)` over project_dependency_findings — which makes
 // the DB tally every matching CVE just to compare against zero — with a
 // single-row existence probe (`select id … limit 1`). These tests pin that the
 // probe selects the SAME branch the count head did across all three paths
@@ -50,11 +50,11 @@ beforeEach(() => {
 describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => {
   it('uses a limit(1) existence probe, not a full count, to pick the branch', async () => {
     // ≥1 PDV row → PDV branch.
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [{ id: 'pdv-x' }],
       error: null,
     });
-    setRpcResponse('get_project_vulnerabilities_from_pdv', { data: [], error: null });
+    setRpcResponse('get_project_dependency_findings_from_pdv', { data: [], error: null });
 
     const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
 
@@ -63,12 +63,12 @@ describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => 
     expect(queryBuilder.limit).toHaveBeenCalledWith(1);
   });
 
-  it('PDV branch: ≥1 PDV row → get_project_vulnerabilities_from_pdv with reachability fields', async () => {
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+  it('PDV branch: ≥1 PDV row → get_project_dependency_findings_from_pdv with reachability fields', async () => {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [{ id: 'pdv-x' }],
       error: null,
     });
-    setRpcResponse('get_project_vulnerabilities_from_pdv', {
+    setRpcResponse('get_project_dependency_findings_from_pdv', {
       data: [
         {
           id: 'v1',
@@ -93,16 +93,16 @@ describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => 
     // PDV-only fields are spread in only on the PDV branch.
     expect(res.body[0].is_reachable).toBe(true);
     expect(res.body[0].depscore).toBe(80);
-    expect(supabase.rpc).toHaveBeenCalledWith('get_project_vulnerabilities_from_pdv', {
+    expect(supabase.rpc).toHaveBeenCalledWith('get_project_dependency_findings_from_pdv', {
       p_project_id: projectId,
     });
-    expect(supabase.rpc).not.toHaveBeenCalledWith('get_project_vulnerabilities', expect.anything());
+    expect(supabase.rpc).not.toHaveBeenCalledWith('get_project_dependency_findings', expect.anything());
   });
 
-  it('legacy branch: zero PDV rows → get_project_vulnerabilities, no reachability fields', async () => {
+  it('legacy branch: zero PDV rows → get_project_dependency_findings, no reachability fields', async () => {
     // Empty probe → usePdv=false → legacy RPC.
-    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
-    setRpcResponse('get_project_vulnerabilities', {
+    setTableResponse('project_dependency_findings', 'then', { data: [], error: null });
+    setRpcResponse('get_project_dependency_findings', {
       data: [
         {
           id: 'v2',
@@ -123,22 +123,22 @@ describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => 
     // No PDV branch → reachability/depscore fields are absent, not null.
     expect(res.body[0]).not.toHaveProperty('is_reachable');
     expect(res.body[0]).not.toHaveProperty('depscore');
-    expect(supabase.rpc).toHaveBeenCalledWith('get_project_vulnerabilities', {
+    expect(supabase.rpc).toHaveBeenCalledWith('get_project_dependency_findings', {
       p_project_id: projectId,
     });
     expect(supabase.rpc).not.toHaveBeenCalledWith(
-      'get_project_vulnerabilities_from_pdv',
+      'get_project_dependency_findings_from_pdv',
       expect.anything(),
     );
   });
 
   it('rpc-error fallback: PDV branch RPC errors → per-dependency deps fallback', async () => {
-    setTableResponse('project_dependency_vulnerabilities', 'then', {
+    setTableResponse('project_dependency_findings', 'then', {
       data: [{ id: 'pdv-x' }],
       error: null,
     });
     // The chosen RPC fails (e.g. not yet deployed) → fallback path.
-    setRpcResponse('get_project_vulnerabilities_from_pdv', {
+    setRpcResponse('get_project_dependency_findings_from_pdv', {
       data: null,
       error: { message: 'function not found' },
     });
@@ -175,7 +175,7 @@ describe('GET /vulnerabilities — SCA branch-selection probe (Phase 1)', () => 
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
-    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_vulnerabilities');
+    expect(supabase.from).not.toHaveBeenCalledWith('project_dependency_findings');
     expect(supabase.rpc).not.toHaveBeenCalled();
   });
 });

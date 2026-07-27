@@ -4,7 +4,7 @@ import { Search, SlidersHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, Pack
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
-import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus, SupplyChainResponse } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import {
   DropdownMenu,
@@ -17,7 +17,6 @@ import { cn } from '../../lib/utils';
 import PackageOverview from '../../components/PackageOverview';
 import { PackageOverviewSkeleton } from '../../components/PackageOverviewSkeleton';
 import { SupplyChainSections } from '../../components/supply-chain/SupplyChainSections';
-import { fetchCapabilitiesState, type CapabilitiesState } from '../../components/CapabilitiesSection';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -139,6 +138,24 @@ function EcosystemIcon({ ecosystem, className }: { ecosystem?: string | null; cl
   return <Package className={className ?? 'h-4 w-4'} aria-hidden />;
 }
 
+// Dependency-row tags as small neutral text badges — a subtle chip (neutral surface + border)
+// with a muted label, no coloured fill. Optional tooltip carries the detail (severity + count,
+// reason) so the label can stay short.
+function DepTagBadge({ label, tooltip }: { label: string; tooltip?: string }) {
+  const badge = (
+    <span className="shrink-0 inline-flex items-center rounded-md border border-border bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-foreground-secondary">
+      {label}
+    </span>
+  );
+  if (!tooltip) return badge;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent side="right">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function buildDependencyFromOverview(
   projectId: string,
   projectDependencyId: string,
@@ -207,6 +224,37 @@ function extractionStepLabel(step: string | null | undefined): string {
   return labels[step] ?? `Processing (${step})...`;
 }
 
+// Client-side cache (per browser session) of the enriched dependency list per project.
+// The Dependencies tab unmounts/remounts on every sidebar-tab switch, and its list comes
+// from a heavy server-side enrichment (multi-wave joins), so without this a re-open blocks
+// on that recompute — 5s+ on local dev where every DB hop is a laptop→Ohio round trip.
+// Seeding from here paints a re-open synchronously with zero round trips; the background
+// fetch then refreshes it in place.
+const depsListCache = new Map<string, ProjectDependency[]>();
+
+/** Clear the per-session dependency-list cache. Called when the project sidebar CLOSES so
+ *  reopening reloads the tab fresh (matching the Findings tab), rather than seeding a stale
+ *  list. Tab switches WITHIN an open sidebar keep the cache (instant); closing drops it. */
+export function clearProjectDepsCache() {
+  depsListCache.clear();
+}
+
+/** Warm the client deps-list cache from the server's ALREADY-WARM cache when the project
+ *  sidebar opens, so switching to the Dependencies tab paints instantly from the seed rather
+ *  than waiting on a click-time round trip. `cachedOnly` means this NEVER triggers the heavy
+ *  multi-wave recompute — it piggybacks on a warm cache (the common case; the deps cache is
+ *  invalidated on data change, not by open) and no-ops on a miss, leaving the tab's own load
+ *  to fetch fresh. Fire-and-forget, off the Findings first-paint critical path. */
+export async function warmProjectDepsCache(organizationId: string, projectId: string): Promise<void> {
+  if (!organizationId || !projectId) return;
+  try {
+    const cached = await api.getProjectDependencies(organizationId, projectId, { cachedOnly: true });
+    if (cached && cached.length > 0) depsListCache.set(projectId, cached);
+  } catch {
+    /* best-effort warm; the tab's own load covers a miss */
+  }
+}
+
 export function ProjectDependenciesContent(props: ProjectDependenciesContentProps) {
   const { project, organizationId, userPermissions, reloadProject, embedInSidebar, onOpenFinding } = props;
   /** Embedded: room under tabs + inset from drawer edge; full page keeps original spacing. */
@@ -239,27 +287,35 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterVulnerability, setFilterVulnerability] = useState(false);
-  const [filterLicenseIssue, setFilterLicenseIssue] = useState(false);
+  const [filterDev, setFilterDev] = useState(false);
+  const [filterUnused, setFilterUnused] = useState(false);
   const [permissionsChecked, setPermissionsChecked] = useState(false);
-  const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
+  const [dependencies, setDependencies] = useState<ProjectDependency[]>(() => depsListCache.get(projectId) ?? []);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
-  const showListLoading = (realtime.isLoading || dependenciesLoading) && !isInitialExtracting;
+  // Only skeleton when there's genuinely nothing to show yet. The open effect seeds the
+  // list from the cache (getProjectDependencies cachedOnly) before the full recompute
+  // resolves — without the `dependencies.length === 0` guard that cached seed stays hidden
+  // behind the skeleton until the slow recompute finishes, which is what made the tab feel
+  // slow. Now the cached list paints immediately and the recompute refreshes it in place.
+  const showListLoading = (realtime.isLoading || dependenciesLoading) && dependencies.length === 0 && !isInitialExtracting;
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [refreshingDependencies, setRefreshingDependencies] = useState(false);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
   const [importStatus, setImportStatus] = useState<ProjectImportStatus | null>(null);
   const prefetchRowTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const hasUserRefreshedRef = useRef(false);
-  // Mirror of `dependencies` for effects that need a row lookup without re-firing on list refreshes.
-  const dependenciesRef = useRef<ProjectDependency[]>([]);
 
   // Right panel overview (when a dependency is selected and sub-tab is Overview)
   const [panelOverview, setPanelOverview] = useState<DependencyOverviewResponse | null>(null);
   const [panelOverviewDepId, setPanelOverviewDepId] = useState<string | null>(null);
   const [panelOverviewLoading, setPanelOverviewLoading] = useState(false);
   const [panelOverviewError, setPanelOverviewError] = useState<string | null>(null);
-  // Capability scan for the selected dep — fetched WITH the overview so the panel paints once.
-  const [panelCapabilities, setPanelCapabilities] = useState<CapabilitiesState | null>(null);
+  // Supply chain + newest-safe-version for the selected dep — also fetched with the overview
+  // (in parallel) and committed together, so the whole package pane paints in one go instead
+  // of the supply-chain block popping in after. Passed down to SupplyChainSections as `preloaded`.
+  const [panelSupplyChain, setPanelSupplyChain] = useState<SupplyChainResponse | null>(null);
+  const [panelSafeVersion, setPanelSafeVersion] = useState<{ version: string | null; isCurrent: boolean } | null>(null);
+  const [panelReloadNonce, setPanelReloadNonce] = useState(0);
 
   // Resizable sidebar: width state (persisted), drag refs
   const SIDEBAR_MIN = 200;
@@ -337,26 +393,36 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     if (!organizationId || !projectId) return;
     hasUserRefreshedRef.current = true;
     setRefreshingDependencies(true);
+    // Fire the list rebuild and (if a package is open) its overview refresh CONCURRENTLY —
+    // they're independent, so total time is max(list, overview) instead of list + overview.
+    // The `.catch` on the overview keeps it from becoming an unhandled rejection while we
+    // await the list first (so the list paints as soon as it's ready).
+    if (selectedDepId) api.clearDependencyOverviewPrefetch(organizationId, projectId, selectedDepId);
+    const listP = api.getProjectDependencies(organizationId, projectId, { bypassCache: true });
+    const overviewP = selectedDepId
+      ? api.getDependencyOverview(organizationId, projectId, selectedDepId, { bypassCache: true }).catch(() => null)
+      : null;
     try {
-      const data = await api.getProjectDependencies(organizationId, projectId, { bypassCache: true });
+      const data = await listP;
       setDependencies(data);
+      depsListCache.set(projectId, data);
       setDependenciesError(null);
-      if (selectedDepId) {
-        api.clearDependencyOverviewPrefetch(organizationId, projectId, selectedDepId);
-        const overview = await api.getDependencyOverview(organizationId, projectId, selectedDepId, { bypassCache: true });
+    } catch (error: any) {
+      setDependenciesError(error.message || 'Failed to load dependencies');
+    }
+    if (overviewP && selectedDepId) {
+      const overview = await overviewP;
+      if (overview) {
         setPanelOverview(overview);
         setPanelOverviewDepId(selectedDepId);
       }
-    } catch (error: any) {
-      setDependenciesError(error.message || 'Failed to load dependencies');
-    } finally {
-      // Keep spinner visible until React has committed and painted the new data
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setRefreshingDependencies(false);
-        });
-      });
     }
+    // Keep spinner visible until React has committed and painted the new data
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setRefreshingDependencies(false);
+      });
+    });
   }, [organizationId, projectId, selectedDepId]);
 
   // Load import status (for showing spinner in Imports column when AST not ready)
@@ -376,15 +442,20 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     hasUserRefreshedRef.current = false;
     let cancelled = false;
     setDependenciesLoading(true);
-    // Cached only — show immediately if we have data
-    api.getProjectDependencies(organizationId, projectId, { cachedOnly: true }).then((cachedDeps) => {
-      if (!cancelled && cachedDeps.length > 0) setDependencies(cachedDeps);
-    });
-    // Full DB — list is ready when this resolves; don't wait for policies/import
+    // Instant paint from the client cache before any network resolves (covers a projectId
+    // switch while mounted; the useState initializer covers a fresh remount; and the
+    // warm-on-open prefetch — see warmProjectDepsCache — usually filled this already).
+    const seededList = depsListCache.get(projectId);
+    if (seededList && seededList.length > 0) setDependencies(seededList);
+    // Full DB. Now that this endpoint is read-through (serves the invalidate-on-change cache
+    // when warm), it's as fast as the old cachedOnly fast-path on a warm cache and the ONLY
+    // list fetch we need — the separate cachedOnly request it used to fire gave no head start
+    // anymore, so it's gone. List is ready when this resolves; don't wait for policies/import.
     api.getProjectDependencies(organizationId, projectId)
       .then((deps) => {
         if (cancelled || hasUserRefreshedRef.current) return;
         setDependencies(deps);
+        depsListCache.set(projectId, deps);
         setDependenciesError(null);
       })
       .catch((err: any) => {
@@ -402,10 +473,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       .catch(() => {});
     return () => { cancelled = true; };
   }, [project?.id, projectId, organizationId, userPermissions?.view_dependencies, permissionsChecked]);
-
-  useEffect(() => {
-    dependenciesRef.current = dependencies;
-  }, [dependencies]);
 
   // Redirect to list when URL dependencyId is not in the loaded list (or clear sidebar selection)
   useEffect(() => {
@@ -425,13 +492,18 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   }, [importStatus?.status, organizationId, projectId, loadImportStatus]);
 
 
-  // Fetch overview for right panel when a dependency is selected (use prefetched if available).
-  // Capabilities load in parallel and the panel paints only when BOTH are ready — no late chip pop-in.
+  // Load EVERYTHING the package pane needs when a dependency is selected — overview,
+  // capabilities, supply chain and the newest-safe-version — in parallel, and commit them in
+  // one setState batch. The pane's skeleton stays until all four resolve, so the whole thing
+  // (overview + supply-chain table + recommendation chip) paints at once instead of the
+  // overview appearing first and the rest popping in after. panelReloadNonce lets the child's
+  // "Try again" re-run this.
   useEffect(() => {
     if (!organizationId || !projectId || !selectedDepId) {
       setPanelOverview(null);
       setPanelOverviewError(null);
-      setPanelCapabilities(null);
+      setPanelSupplyChain(null);
+      setPanelSafeVersion(null);
       return;
     }
     let cancelled = false;
@@ -439,17 +511,22 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     setPanelOverviewDepId(null);
     setPanelOverviewLoading(true);
     setPanelOverviewError(null);
-    setPanelCapabilities(null);
+    setPanelSupplyChain(null);
+    setPanelSafeVersion(null);
     const depIdForFetch = selectedDepId;
     const prefetched = api.consumePrefetchedOverview(organizationId, projectId, selectedDepId);
     const overviewPromise = prefetched
       ? prefetched.then(([res]) => res).catch(() => null)
       : api.getDependencyOverview(organizationId, projectId, selectedDepId);
-    // Package identity from the list row lets capabilities fetch in parallel with the overview.
-    const listDep = dependenciesRef.current.find((d) => d.id === depIdForFetch);
-    const capabilitiesPromise = listDep
-      ? fetchCapabilitiesState(organizationId, listDep.ecosystem, listDep.name, listDep.version)
-      : null;
+    // These two used to live inside SupplyChainSections (data, then safe-version waterfalled
+    // after it). Fetching them here — alongside the overview — is what lets the pane paint once.
+    const supplyChainPromise = api
+      .getDependencySupplyChain(organizationId, projectId, selectedDepId)
+      .catch(() => null);
+    const safeVersionPromise = api
+      .getLatestSafeVersion(organizationId, projectId, selectedDepId, 'high', true)
+      .then((r) => ({ version: r.safeVersion, isCurrent: r.isCurrent }))
+      .catch(() => null);
     (async () => {
       try {
         const res = await overviewPromise;
@@ -458,11 +535,10 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
           setPanelOverviewError('Failed to load dependency');
           return;
         }
-        // Deep-link fallback: list row not loaded yet — derive identity from the overview itself.
-        const caps = await (capabilitiesPromise
-          ?? fetchCapabilitiesState(organizationId, res.ecosystem, res.name ?? '', res.version ?? ''));
+        const [supplyChain, safeVersion] = await Promise.all([supplyChainPromise, safeVersionPromise]);
         if (cancelled) return;
-        setPanelCapabilities(caps);
+        setPanelSupplyChain(supplyChain);
+        setPanelSafeVersion(safeVersion);
         setPanelOverview(res);
         setPanelOverviewDepId(depIdForFetch);
       } catch (err: any) {
@@ -472,14 +548,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       }
     })();
     return () => { cancelled = true; };
-  }, [organizationId, projectId, selectedDepId]);
-
-  // Prefetch supply chain when a package is selected — SupplyChainSections (below the
-  // overview on the detail page) consumes it, so its tables paint without a second wait.
-  useEffect(() => {
-    if (!organizationId || !projectId || !selectedDepId) return;
-    api.prefetchDependencySupplyChain(organizationId, projectId, selectedDepId);
-  }, [organizationId, projectId, selectedDepId]);
+  }, [organizationId, projectId, selectedDepId, panelReloadNonce]);
 
   const selectedDepFromList = selectedDepId ? dependencies.find((d) => d.id === selectedDepId) : null;
 
@@ -571,7 +640,34 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
             ))}
           </div>
         </aside>
-        <div className="flex-1 min-w-0" />
+        {/* Static 1px divider so the two-pane split reads the same as the loaded view (which
+            shows a resize handle here). Without it the skeleton looked like a single pane. */}
+        <div className="shrink-0 flex justify-center px-2 -mx-2 -ml-px" aria-hidden>
+          <div className="self-stretch bg-border min-h-full shrink-0" style={{ width: 1, minWidth: 1, maxWidth: 1 }} />
+        </div>
+        {/* Right pane shows the real "no package selected" empty state, not a content
+            skeleton — nothing is selected while loading, so this is exactly what the loaded
+            view renders here anyway. Keeping it steady avoids a skeleton→empty-state flash. */}
+        <div
+          className={cn(
+            'flex-1 min-w-0 flex flex-col overflow-hidden',
+            embedInSidebar ? embedShellBg : 'bg-background-content'
+          )}
+        >
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="flex flex-col items-center gap-4 text-center max-w-md">
+              <div className="rounded-full bg-background-card/80 border border-border p-5 shadow-sm ring-1 ring-foreground/[0.04]">
+                <Package className="h-10 w-10 text-foreground-secondary" aria-hidden />
+              </div>
+              <div className="space-y-1">
+                <p className="text-base font-medium text-foreground">No package selected</p>
+                <p className="text-sm text-foreground-secondary leading-relaxed">
+                  Click a dependency in the list to see its version, vulnerabilities, license, and where it’s used in your code.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </main>
     );
   }
@@ -589,13 +685,22 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     })
     .filter(dep => {
       if (filterVulnerability && !getVulnSeverityInfo(dep)) return false;
-      // Only treat as license issue when policy was actually run and returned allowed: false.
-      // When policy_result is null (policy not evaluated yet), don't show/filter as license issue.
-      const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
-      if (filterLicenseIssue && !hasLicenseIssue) return false;
+      if (filterDev && dep.source !== 'devDependencies') return false;
+      // "Unused" mirrors the row icon exactly: direct, imported by no file, and not a dev
+      // dep (dev tooling isn't imported by design, so it's never flagged unused).
+      const isUnused = dep.files_importing_count === 0 && dep.is_direct && dep.source !== 'devDependencies';
+      if (filterUnused && !isUnused) return false;
       return true;
     })
     .sort((a, b) => (b.files_importing_count || 0) - (a.files_importing_count || 0));
+
+  // Filter dropdown options — mirror the row tags worth filtering on.
+  const filterOptions = [
+    { id: 'vulnerable', label: 'Vulnerable', checked: filterVulnerability, set: setFilterVulnerability },
+    { id: 'dev', label: 'Dev dependency', checked: filterDev, set: setFilterDev },
+    { id: 'unused', label: 'Unused', checked: filterUnused, set: setFilterUnused },
+  ];
+  const anyFilterActive = filterVulnerability || filterDev || filterUnused;
 
   return (
     <main
@@ -642,7 +747,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                   placeholder="Search dependencies..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                 />
               </div>
               <DropdownMenu>
@@ -660,56 +765,34 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                     Filter by
                   </DropdownMenuLabel>
                   <div className="px-2 space-y-0">
-                    <div
-                      className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                      onClick={() => setFilterVulnerability((v) => !v)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterVulnerability((v) => !v); } }}
-                      role="option"
-                      aria-selected={filterVulnerability}
-                      tabIndex={0}
-                    >
-                      <Checkbox
-                        id="filter-vulnerability"
-                        checked={filterVulnerability}
-                        onCheckedChange={(checked) => setFilterVulnerability(checked === true)}
-                        className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <label htmlFor="filter-vulnerability" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        Vulnerability
-                      </label>
-                      <button
-                        type="button"
-                        className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterLicenseIssue(false); }}
+                    {filterOptions.map((opt) => (
+                      <div
+                        key={opt.id}
+                        className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
+                        onClick={() => opt.set((v) => !v)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); opt.set((v) => !v); } }}
+                        role="option"
+                        aria-selected={opt.checked}
+                        tabIndex={0}
                       >
-                        Select only
-                      </button>
-                    </div>
-                    <div
-                      className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                      onClick={() => setFilterLicenseIssue((v) => !v)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterLicenseIssue((v) => !v); } }}
-                      role="option"
-                      aria-selected={filterLicenseIssue}
-                      tabIndex={0}
-                    >
-                      <Checkbox
-                        id="filter-license"
-                        checked={filterLicenseIssue}
-                        onCheckedChange={(checked) => setFilterLicenseIssue(checked === true)}
-                        className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <label htmlFor="filter-license" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        License violation
-                      </label>
-                      <button
-                        type="button"
-                        className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterVulnerability(false); }}
-                      >
-                        Select only
-                      </button>
-                    </div>
+                        <Checkbox
+                          id={`filter-${opt.id}`}
+                          checked={opt.checked}
+                          onCheckedChange={(checked) => opt.set(checked === true)}
+                          className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
+                        />
+                        <label htmlFor={`filter-${opt.id}`} className="text-sm font-normal cursor-pointer flex-1 text-foreground">
+                          {opt.label}
+                        </label>
+                        <button
+                          type="button"
+                          className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
+                          onClick={(e) => { e.stopPropagation(); filterOptions.forEach((o) => o.set(o.id === opt.id)); }}
+                        >
+                          Select only
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -787,7 +870,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               <p className="text-sm text-foreground-secondary mt-1">
                 {searchQuery.trim()
                   ? `Your search for "${searchQuery.trim()}" did not return any results`
-                  : filterVulnerability || filterLicenseIssue
+                  : anyFilterActive
                     ? 'Your filters did not return any results'
                     : 'No dependencies found yet.'}
               </p>
@@ -828,9 +911,13 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                           }
                         }
                       }}
+                      aria-current={isSelected ? 'true' : undefined}
                       className={cn(
-                        'flex items-center gap-1.5 py-1.5 text-sm transition-colors duration-150 cursor-pointer hover:bg-background-subtle',
-                        rowInset
+                        'flex items-center gap-1.5 py-1.5 text-sm transition-colors duration-150 cursor-pointer',
+                        rowInset,
+                        // The open dependency stays tinted so it's clear which row the right
+                        // pane belongs to — a persistent background, distinct from hover.
+                        isSelected ? 'bg-background-subtle' : 'hover:bg-background-subtle'
                       )}
                     >
                       <EcosystemIcon ecosystem={dep.ecosystem} className="h-4 w-4 shrink-0 object-contain" />
@@ -845,58 +932,34 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         </TooltipContent>
                       </Tooltip>
                       {hasLicenseIssue && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
-                              License
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">License doesn’t match project policy</TooltipContent>
-                        </Tooltip>
+                        <DepTagBadge label="License" tooltip="License doesn’t match project policy" />
                       )}
                       {dep.source === 'devDependencies' && (
-                        <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
-                          Dev
-                        </span>
+                        <DepTagBadge label="Dev" tooltip="Dev dependency" />
                       )}
                       {vulnInfo && (
-                        <span className={cn('shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border cursor-default', vulnInfo.tier === 'critical' && 'bg-destructive/10 text-destructive border-destructive/30', vulnInfo.tier === 'high' && 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30', vulnInfo.tier === 'medium' && 'bg-warning/15 text-warning border-warning/30', vulnInfo.tier === 'low' && 'bg-foreground/5 text-foreground-secondary border-foreground/10')}>
-                          Vulnerable
-                        </span>
+                        <DepTagBadge label="Vulnerable" tooltip={vulnInfo.label} />
                       )}
-                      {dep.files_importing_count === 0 && dep.is_direct && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
-                              Unused
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">Not imported in any file</TooltipContent>
-                        </Tooltip>
+                      {/* "Unused" = declared but imported by no source file. Only a meaningful
+                          signal for runtime deps; dev tooling (eslint, tsc, jest, @types/*, build
+                          tools) is used via scripts/config/type-resolution, not `import`, so 0
+                          imports there is expected — flagging it "Unused" is misleading (and dev
+                          scope is already floored to `unreachable` on the reachability side). */}
+                      {dep.files_importing_count === 0 && dep.is_direct && dep.source !== 'devDependencies' && (
+                        <DepTagBadge label="Unused" tooltip="Not imported in any file" />
                       )}
                       {dep.is_current_version_banned && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
-                              Banned
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">This version is banned by org policy</TooltipContent>
-                        </Tooltip>
+                        <DepTagBadge label="Banned" tooltip="This version is banned by org policy" />
                       )}
                       {dep.is_outdated && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
-                              {dep.versions_behind && dep.versions_behind > 0 ? `${dep.versions_behind} behind` : 'Outdated'}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">
-                            {dep.versions_behind && dep.versions_behind > 0
+                        <DepTagBadge
+                          label={dep.versions_behind && dep.versions_behind > 0 ? `${dep.versions_behind} behind` : 'Outdated'}
+                          tooltip={
+                            dep.versions_behind && dep.versions_behind > 0
                               ? `${dep.versions_behind} version${dep.versions_behind > 1 ? 's' : ''} behind latest`
-                              : 'A newer version is available'}
-                          </TooltipContent>
-                        </Tooltip>
+                              : 'A newer version is available'
+                          }
+                        />
                       )}
                     </div>
                   </li>
@@ -928,7 +991,11 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       <div
         className={cn(
           'flex-1 min-w-0 flex flex-col overflow-hidden',
-          embedInSidebar ? embedShellBg : 'bg-background-content'
+          embedInSidebar ? embedShellBg : 'bg-background-content',
+          // When the list is collapsed the rail is position:absolute (out of flow), so this
+          // pane fills the full width and the rail overlays — and clips — its left edge. Inset
+          // it by the rail width so nothing hides behind the collapse button.
+          sidebarCollapsed && 'pl-12'
         )}
       >
         {!selectedDepId ? (
@@ -967,7 +1034,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                 projectId={projectId}
                 latestVersion={panelOverview?.latest_version ?? null}
                 policies={policies}
-                capabilities={panelCapabilities}
                 isDevDependency={selectedDepFromList?.source === 'devDependencies'}
               />
               {/* Supply chain folded into the package page: version tooling + vulns + brings-in.
@@ -980,6 +1046,8 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                   dependencyId={selectedDepId}
                   ecosystem={selectedDepFromList?.ecosystem ?? panelOverview?.ecosystem ?? null}
                   onOpenFinding={onOpenFinding}
+                  preloaded={{ data: panelSupplyChain, safeVersion: panelSafeVersion }}
+                  onRetry={() => setPanelReloadNonce((n) => n + 1)}
                 />
               )}
             </div>

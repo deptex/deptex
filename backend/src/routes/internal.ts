@@ -39,7 +39,7 @@ router.post('/sla-check', async (_req, res) => {
       const now = new Date().toISOString();
       for (const row of approaching) {
         await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .update({ sla_status: 'warning', sla_warning_notified_at: now })
           .eq('id', row.id);
         await emitEvent({
@@ -68,7 +68,7 @@ router.post('/sla-check', async (_req, res) => {
       const now = new Date().toISOString();
       for (const row of breached) {
         await supabase
-          .from('project_dependency_vulnerabilities')
+          .from('project_dependency_findings')
           .update({
             sla_status: 'breached',
             sla_breached_at: now,

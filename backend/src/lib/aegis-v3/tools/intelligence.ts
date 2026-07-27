@@ -28,7 +28,7 @@ const checkCisaKev: AegisToolEntry<{ cveOrOsvId: string }> = {
 
     const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     let query = ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, cisa_kev, aliases')
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds);
@@ -77,7 +77,7 @@ const getEpssScore: AegisToolEntry<{ cveOrOsvId: string }> = {
 
     const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     let query = ctx.supabase
-      .from('project_dependency_vulnerabilities')
+      .from('project_dependency_findings')
       .select('osv_id, epss_score, aliases')
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds);

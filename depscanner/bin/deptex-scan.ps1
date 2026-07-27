@@ -114,6 +114,15 @@ if ($env:DEPTEX_RULE_MODEL) { $EnvFlags += @('-e', "DEPTEX_RULE_MODEL=$($env:DEP
 if ($env:DEPTEX_RULE_BUDGET_USD) { $EnvFlags += @('-e', "DEPTEX_RULE_BUDGET_USD=$($env:DEPTEX_RULE_BUDGET_USD)") }
 if ($env:DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR) { $EnvFlags += @('-e', "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$($env:DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR)") }
 
+# Reachability-focused fast scan + OSV fallback (parity with the bash wrapper).
+if ($env:DEPTEX_SKIP_OPTIONAL_SCANS) { $EnvFlags += @('-e', "DEPTEX_SKIP_OPTIONAL_SCANS=$($env:DEPTEX_SKIP_OPTIONAL_SCANS)") }
+if ($env:DEPTEX_OSV_FALLBACK) { $EnvFlags += @('-e', "DEPTEX_OSV_FALLBACK=$($env:DEPTEX_OSV_FALLBACK)") }
+
+# Arc 2 dep-import-graph knobs (pipeline-steps/dep-import-graph.ts).
+if ($env:DEPTEX_DEP_IMPORT_WALL_MS) { $EnvFlags += @('-e', "DEPTEX_DEP_IMPORT_WALL_MS=$($env:DEPTEX_DEP_IMPORT_WALL_MS)") }
+if ($env:DEPTEX_DEP_IMPORT_MAX_DISTS) { $EnvFlags += @('-e', "DEPTEX_DEP_IMPORT_MAX_DISTS=$($env:DEPTEX_DEP_IMPORT_MAX_DISTS)") }
+if ($env:DEPTEX_DEP_IMPORT_DISABLE) { $EnvFlags += @('-e', "DEPTEX_DEP_IMPORT_DISABLE=$($env:DEPTEX_DEP_IMPORT_DISABLE)") }
+
 # OpenAI-compatible third-party hosts. DEPTEX_RULE_BASE_URL routes the
 # openai-style rule-generation call; the matching host-specific API key
 # is forwarded by name (no =value) so secrets stay off docker's argv.
