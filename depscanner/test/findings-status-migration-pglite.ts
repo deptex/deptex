@@ -186,12 +186,14 @@ async function main() {
   console.log('Seeding finding rows...');
   await seed(db);
 
-  // phase55 predates phase74's rename (project_dependency_findings ->
-  // project_dependency_findings). Replaying it onto the current schema means
-  // mapping the old table name forward; the backfill logic is unchanged.
+  // phase55 predates phase74's rename (project_dependency_vulnerabilities ->
+  // project_dependency_findings, project_vulnerability_events ->
+  // project_dependency_finding_events). Replaying it onto the current schema
+  // means mapping the old table names forward; the backfill logic is unchanged.
   const phase55 = fs
     .readFileSync(PHASE55_FILE, 'utf8')
-    .replace(/project_dependency_findings/g, 'project_dependency_findings');
+    .replace(/project_dependency_vulnerabilities/g, 'project_dependency_findings')
+    .replace(/project_vulnerability_events/g, 'project_dependency_finding_events');
   console.log('\nApplying phase55 (first run)...');
   await db.exec(phase55);
   await assertState(db, 'after 1st apply');
@@ -205,7 +207,8 @@ async function main() {
   // must auto-reopen when its reachability later improves.
   const phase55c = fs
     .readFileSync(PHASE55C_FILE, 'utf8')
-    .replace(/project_dependency_findings/g, 'project_dependency_findings');
+    .replace(/project_dependency_vulnerabilities/g, 'project_dependency_findings')
+    .replace(/project_vulnerability_events/g, 'project_dependency_finding_events');
   console.log('\nApplying phase55c (triggers)...');
   await db.exec(phase55c);
 
