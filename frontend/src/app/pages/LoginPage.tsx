@@ -3,6 +3,7 @@ import { Loader2, ScanSearch, KeyRound, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
 import { Link, useNavigate } from 'react-router-dom';
+import { resolvePreviewAccess } from '../../lib/preview-access';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -79,23 +80,79 @@ function LoginTypewriterBlock() {
   );
 }
 
+// Emerald branding rail, shared by the sign-in screen and the pre-launch notice
+// so both states keep the same shape.
+function BrandPanel({ headline }: { headline: string }) {
+  return (
+    <div className="hidden lg:flex lg:w-1/3 flex-col justify-center p-12 xl:p-16 bg-emerald-900 border-r border-white/10">
+      <div>
+        <h2 className="text-2xl xl:text-3xl font-semibold text-white mb-4 max-w-md">
+          {headline}
+        </h2>
+        <p className="text-white/90 text-base max-w-sm leading-relaxed mb-8">
+          The AI-powered dependency security platform. Secure your supply chain, automate compliance, and ship with confidence.
+        </p>
+        <LoginTypewriterBlock />
+      </div>
+    </div>
+  );
+}
+
+// PRE-LAUNCH ONLY — delete this component, the `hasPreviewAccess` early return,
+// and lib/preview-access.ts when sign-ups open.
+function ConstructionScreen() {
+  return (
+    <div className="min-h-screen flex bg-background">
+      <BrandPanel headline="Deptex is launching soon" />
+
+      <div className="w-full lg:flex-1 flex flex-col justify-center p-8 sm:p-12 lg:p-16">
+        <div className="w-full max-w-sm mx-auto">
+          <img
+            src="/images/logo_with_text.png"
+            alt="Deptex"
+            className="h-7 object-contain mb-8"
+          />
+          <span className="inline-flex items-center rounded-full border border-border bg-background-subtle px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-foreground-secondary">
+            Launching September 2026
+          </span>
+          <h1 className="mt-4 text-2xl font-semibold text-foreground mb-1">
+            Deptex is still under construction
+          </h1>
+          <p className="text-foreground-secondary text-sm mb-8">
+            We're finishing the platform before opening it up, so sign-ups are closed for now.
+            Everything we're building is on the site in the meantime.
+          </p>
+          <Button asChild variant="white" className="w-full">
+            <Link to="/">Explore the platform</Link>
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function LoginPage() {
   const { signInWithGoogleIdToken, signInWithGitHub, loading } = useAuth();
   const navigate = useNavigate();
   const [googleLoading, setGoogleLoading] = useState(false);
   const [githubLoading, setGitHubLoading] = useState(false);
+  // Pre-launch: only browsers holding a preview grant see the sign-in buttons.
+  // Resolved once on mount — the query param also writes the grant. See lib/preview-access.
+  const [hasPreviewAccess] = useState(() => resolvePreviewAccess(window.location.search));
 
   const busy = googleLoading || githubLoading;
 
   // Load Google Identity Services once so the Google button can open its popup.
+  // Skipped behind the curtain — no third-party script for visitors who only see the notice.
   useEffect(() => {
+    if (!hasPreviewAccess) return;
     if (document.querySelector(`script[src="${GIS_SRC}"]`)) return;
     const s = document.createElement('script');
     s.src = GIS_SRC;
     s.async = true;
     s.defer = true;
     document.head.appendChild(s);
-  }, []);
+  }, [hasPreviewAccess]);
 
   // Google sign-in via the GIS popup code flow: Google runs on OUR client (so the
   // consent screen is branded to deptex.dev, not supabase.co), returns an auth
@@ -151,6 +208,13 @@ export default function LoginPage() {
     }
   };
 
+  // Ahead of the auth-loading gate: a visitor without a grant isn't signing in either
+  // way, so paint the notice immediately rather than flashing a spinner first. Anyone
+  // holding a session never reaches this component — PublicRoute redirects them.
+  if (!hasPreviewAccess) {
+    return <ConstructionScreen />;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -162,17 +226,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex bg-background">
       {/* Left: branding - emerald, one-third width */}
-      <div className="hidden lg:flex lg:w-1/3 flex-col justify-center p-12 xl:p-16 bg-emerald-900 border-r border-white/10">
-        <div>
-          <h2 className="text-2xl xl:text-3xl font-semibold text-white mb-4 max-w-md">
-            You're signing in to Deptex
-          </h2>
-          <p className="text-white/90 text-base max-w-sm leading-relaxed mb-8">
-            The AI-powered dependency security platform. Secure your supply chain, automate compliance, and ship with confidence.
-          </p>
-          <LoginTypewriterBlock />
-        </div>
-      </div>
+      <BrandPanel headline="You're signing in to Deptex" />
 
       {/* Right: sign-in */}
       <div className="w-full lg:flex-1 flex flex-col justify-center p-8 sm:p-12 lg:p-16">
